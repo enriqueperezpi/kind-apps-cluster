@@ -1,22 +1,42 @@
 # kind-apps-cluster
 
-Local Kubernetes cluster with ArgoCD, Gateway API (Cilium), and cert-manager — all managed by an idempotent bash script.
+Local Kubernetes cluster with ArgoCD, Gateway API (Cilium + MetalLB), and cert-manager — all managed by an idempotent bash script.
 
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────────┐
-│  kind cluster (localhost)                           │
-│                                                     │
-│  ┌─────────────┐  ┌──────────────┐  ┌───────────┐  │
-│  │   Cilium    │  │ cert-manager │  │  ArgoCD   │  │
-│  │ Gateway API │  │  (selfsigned)│  │  (server) │  │
-│  └──────┬──────┘  └──────────────┘  └─────┬─────┘  │
-│         │                                  │        │
-│         └── HTTPRoute ─────────────────────┘        │
-│                                                     │
-│  http://argocd.localtest.me ──> ArgoCD UI           │
-└─────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────┐
+│  kind cluster                                                    │
+│                                                                  │
+│  ┌─────────────┐  ┌──────────┐  ┌──────────────┐  ┌──────────┐  │
+│  │   Cilium    │  │ MetalLB  │  │ cert-manager │  │  ArgoCD  │  │
+│  │ Gateway API │  │  (L2)    │  │ (selfsigned) │  │  Server  │  │
+│  └──────┬──────┘  └────┬─────┘  └──────────────┘  └─────┬────┘  │
+│         │               │                                │       │
+│         │  LoadBalancer IP (e.g. 172.18.0.200)           │       │
+│         │               │                                │       │
+│         └─── Gateway ───┼── HTTPRoute ───────────────────┘       │
+│                                                                  │
+└──────────────────────────┬───────────────────────────────────────┘
+                           │
+        host route / port-forward
+                           │
+                    ┌──────┴──────┐
+                    │   Browser   │
+                    │  localhost  │
+                    └─────────────┘
+```
+
+### Traffic flow
+
+```
+Browser
+  │
+  ├─ Option A: Gateway IP + host route
+  │    http://172.18.0.200 ──► Docker bridge ──► MetalLB ──► Cilium ──► ArgoCD
+  │
+  └─ Option B: kubectl port-forward (recommended on macOS)
+       http://localhost:8080 ──► port-forward ──► ArgoCD Service ──► ArgoCD Pod
 ```
 
 ## Prerequisites
@@ -46,7 +66,7 @@ vim config.conf
 ./setup.sh --non-interactive
 ```
 
-After the full deploy completes you will see the ArgoCD admin password and URL in the terminal.
+After the full deploy completes the script will print the Gateway IP, ArgoCD admin password, and access instructions.
 
 ## Usage
 
@@ -55,16 +75,17 @@ After the full deploy completes you will see the ArgoCD admin password and URL i
 Run `./setup.sh` to get the menu:
 
 ```
-  1) Full deploy (cluster + gateway + cert-mgr + argocd + apps)
-  2) Create / verify kind cluster only
-  3) Install Gateway API + Cilium
-  4) Install cert-manager
-  5) Install ArgoCD
-  6) Apply ArgoCD applications from ./argocd-apps
-  7) Show status of all components
-  8) Get ArgoCD admin password
-  9) Delete cluster
-  0) Exit
+  1)  Full deploy (cluster + gateway + cert-mgr + argocd + apps)
+  2)  Create / verify kind cluster only
+  3)  Install Gateway API + Cilium
+  4)  Install cert-manager
+  5)  Install ArgoCD
+  6)  Apply ArgoCD applications from ./argocd-apps
+  7)  Show status of all components
+  8)  Get ArgoCD admin password
+  9)  Port-forward ArgoCD (http://localhost:8080)
+  10) Delete cluster
+  0)  Exit
 ```
 
 Every option is **idempotent** — you can run any of them multiple times safely.
@@ -83,6 +104,37 @@ This performs a full deploy (option 1) without prompting.
 ./setup.sh /path/to/my-config.conf
 ```
 
+## Accessing ArgoCD
+
+The script deploys a Gateway API `Gateway` with a MetalLB-assigned IP (e.g. `172.18.0.200`). Since this IP lives on the Docker bridge network, you have two options to reach it:
+
+### Option A — Port-forward (recommended, no sudo)
+
+```bash
+./setup.sh   # option 9
+```
+
+Opens `http://localhost:8080` → ArgoCD UI. Press Ctrl+C to stop.
+
+### Option B — Host route (direct access to Gateway IP)
+
+The script attempts this automatically during deploy. If it fails (needs sudo), run manually:
+
+```bash
+# macOS
+sudo route -n add -host 172.18.0.200 $(docker network inspect kind -f '{{(index .IPAM.Config 0).Gateway}}')
+
+# Linux
+sudo ip route add 172.18.0.200/32 via $(docker network inspect kind -f '{{(index .IPAM.Config 0).Gateway}}')
+```
+
+Then open `http://172.18.0.200` directly.
+
+### Credentials
+
+- **User:** `admin`
+- **Password:** shown after deploy (or run `./setup.sh` → option 8)
+
 ## Configuration (`config.conf`)
 
 All parameters live in `config.conf` and can be overridden with environment variables:
@@ -90,7 +142,7 @@ All parameters live in `config.conf` and can be overridden with environment vari
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `CLUSTER_NAME` | `kind-apps-cluster` | kind cluster name |
-| `K8S_VERSION` | `v1.31.0` | Kubernetes version (kind node image tag) |
+| `K8S_VERSION` | `v1.32.3` | Kubernetes version (kind node image tag) |
 | `WORKER_NODES` | `1` | Number of worker nodes |
 | `ARGOCD_NAMESPACE` | `argocd` | Namespace for ArgoCD |
 | `ARGOCD_VERSION` | `stable` | ArgoCD manifest version |
@@ -102,6 +154,17 @@ All parameters live in `config.conf` and can be overridden with environment vari
 | `AUTO_INSTALL_TOOLS` | `true` | Auto-install missing CLI tools |
 | `HTTP_PORT` | `80` | Host port mapped to HTTP |
 | `HTTPS_PORT` | `443` | Host port mapped to HTTPS |
+
+## Components
+
+| Component | Purpose | How it works |
+|-----------|---------|--------------|
+| **kind** | Local K8s cluster | Docker-based, ports 80/443 mapped to control-plane |
+| **Cilium** | CNI + Gateway controller | Replaces kube-proxy and nginx-ingress; implements Gateway API |
+| **MetalLB** | LoadBalancer IPs in kind | L2 advertisement from Docker bridge subnet |
+| **Gateway API** | Ingress standard | CRDs (`Gateway`, `HTTPRoute`) — Cilium is the controller |
+| **cert-manager** | Certificate management | Installed with selfsigned `ClusterIssuer` for local dev |
+| **ArgoCD** | GitOps CD | Deploys apps from `argocd-apps/` directory |
 
 ## Deploying Applications with ArgoCD
 
@@ -137,16 +200,6 @@ Then apply:
 ./setup.sh   # option 6 — Apply ArgoCD applications
 ```
 
-### ArgoCD UI
-
-Open **http://argocd.localtest.me** in your browser.
-
-The `*.localtest.me` domain resolves to `127.0.0.1` automatically — no `/etc/hosts` changes needed.
-
-Credentials:
-- **User:** `admin`
-- **Password:** shown after deploy (or run `./setup.sh` → option 8)
-
 ## Project Structure
 
 ```
@@ -156,9 +209,9 @@ kind-apps-cluster/
 ├── lib/
 │   ├── utils.sh          # Logging, wait helpers
 │   ├── tools.sh          # Tool detection & installation
-│   ├── kind.sh           # kind cluster lifecycle
-│   ├── argocd.sh         # ArgoCD install, patch, app apply
-│   ├── gateway-api.sh    # Gateway API CRDs + Cilium + HTTPRoute
+│   ├── kind.sh           # kind cluster lifecycle (health checks)
+│   ├── argocd.sh         # ArgoCD install, insecure config, Gateway info
+│   ├── gateway-api.sh    # Gateway API CRDs + Cilium + MetalLB + HTTPRoute
 │   └── cert-manager.sh   # cert-manager + ClusterIssuer
 └── argocd-apps/
     ├── README.md
@@ -169,10 +222,11 @@ kind-apps-cluster/
 
 The script is designed to be re-run safely at any time:
 
-- **Cluster**: skips creation if it already exists.
-- **Helm charts** (Cilium, cert-manager): uses `helm upgrade --install` — reconciles to desired state.
-- **ArgoCD**: applies the manifest (kubectl apply is naturally idempotent).
-- **ArgoCD apps**: applies YAMLs with `kubectl apply`.
+- **Cluster**: detects unhealthy containers and recreates automatically.
+- **Helm charts** (Cilium, cert-manager): `helm upgrade --install` — reconciles to desired state.
+- **MetalLB**: IP pool and L2Advertisement are applied (overwrite on re-run).
+- **ArgoCD**: config is set via `argocd-cmd-params-cm` ConfigMap + rollout restart.
+- **ArgoCD apps**: `kubectl apply` is naturally idempotent.
 
 ## Troubleshooting
 
@@ -185,17 +239,34 @@ ERROR: failed to create cluster: could not find a container runtime
 **Ports 80/443 in use**
 → Edit `HTTP_PORT` / `HTTPS_PORT` in `config.conf`.
 
-**Cilium gateway not routing**
+**MetalLB Gateway has no IP**
 ```bash
-cilium status --wait          # from inside the cluster
-kubectl get gateway -A        # check gateway status
-kubectl get httproute -A      # check route status
+kubectl get pods -n metallb-system           # check MetalLB pods
+kubectl get gateway -n argocd                # check Gateway status
+kubectl get svc -n argocd | grep gateway     # check LoadBalancer service
+```
+
+**Gateway IP not reachable from host**
+```bash
+# Check host route
+route -n get 172.18.0.200        # macOS
+ip route get 172.18.0.200        # Linux
+
+# Or use port-forward instead
+./setup.sh   # option 9
+```
+
+**ArgoCD not loading (connection refused)**
+```bash
+kubectl get pods -n argocd                          # check pods
+kubectl get configmap argocd-cmd-params-cm -n argocd -o yaml   # verify insecure=true
+kubectl port-forward -n argocd svc/argocd-server 8080:443      # fallback
 ```
 
 **Reset everything**
 ```bash
-./setup.sh   # option 9 — Delete cluster
-./setup.sh   # option 1 — Full deploy
+./setup.sh   # option 10 — Delete cluster
+./setup.sh   # option 1  — Full deploy
 ```
 
 ## License

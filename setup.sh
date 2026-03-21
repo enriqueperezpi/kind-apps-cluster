@@ -129,6 +129,16 @@ action_delete_cluster() {
   delete_cluster
 }
 
+action_port_forward_argocd() {
+  need_cluster || return
+  header "Port-Forward ArgoCD"
+  echo -e "  Forwarding ${BOLD}localhost:8080 -> argocd-server:443${NC}"
+  echo -e "  Open: ${BOLD}http://localhost:8080${NC}"
+  echo -e "  Press Ctrl+C to stop."
+  echo ""
+  kubectl port-forward -n "$ARGOCD_NAMESPACE" svc/argocd-server 8080:443
+}
+
 # ── Menu ─────────────────────────────────────────────────────
 show_menu() {
   header "kind-apps-cluster  —  Local K8s + ArgoCD"
@@ -141,7 +151,8 @@ show_menu() {
   echo -e "  ${BOLD}6)${NC} Apply ArgoCD applications from ${ARGOCD_APPS_DIR}"
   echo -e "  ${BOLD}7)${NC} Show status of all components"
   echo -e "  ${BOLD}8)${NC} Get ArgoCD admin password"
-  echo -e "  ${BOLD}9)${NC} Delete cluster"
+  echo -e "  ${BOLD}9)${NC} Port-forward ArgoCD (http://localhost:8080)"
+  echo -e "  ${BOLD}10)${NC} Delete cluster"
   echo ""
   echo -e "  ${BOLD}0)${NC} Exit"
   echo ""
@@ -165,7 +176,8 @@ main() {
       6) action_apply_apps ;;
       7) action_status ;;
       8) action_get_argocd_password ;;
-      9) action_delete_cluster ;;
+      9) action_port_forward_argocd ;;
+      10) action_delete_cluster ;;
       0) echo "Bye."; exit 0 ;;
       *) log_warn "Invalid option." ;;
     esac

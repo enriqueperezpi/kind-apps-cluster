@@ -18,7 +18,7 @@ _cilium_installed() {
 
 _metallb_installed() {
   kubectl get namespace "$METALLAB_NAMESPACE" &>/dev/null && \
-    kubectl get deployment metallb-controller -n "$METALLAB_NAMESPACE" &>/dev/null
+    kubectl get deployment controller -n "$METALLAB_NAMESPACE" &>/dev/null
 }
 
 install_gateway_api_crds() {
