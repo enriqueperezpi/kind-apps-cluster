@@ -131,33 +131,15 @@ _add_host_route() {
     return 0
   fi
 
-  log_info "Adding host route: ${lb_ip} via ${gateway}…"
-
   local os
   os=$(uname -s)
+  
   case "$os" in
     Darwin)
-      # macOS — route may already exist (exit 71 = File exists)
-      if sudo route -n add -host "$lb_ip" "$gateway" 2>/dev/null; then
-        log_success "Route added."
-      elif sudo route -n get "$lb_ip" &>/dev/null; then
-        log_warn "Route to ${lb_ip} already exists — skipping."
-      else
-        log_warn "Could not add route automatically."
-        _print_fallback_instructions "$lb_ip"
-        return 1
-      fi
+      _add_host_route_darwin "$lb_ip" "$gateway"
       ;;
     Linux)
-      if sudo ip route add "${lb_ip}/32" via "$gateway" 2>/dev/null; then
-        log_success "Route added."
-      elif ip route get "$lb_ip" &>/dev/null; then
-        log_warn "Route to ${lb_ip} already exists — skipping."
-      else
-        log_warn "Could not add route automatically."
-        _print_fallback_instructions "$lb_ip"
-        return 1
-      fi
+      _add_host_route_linux "$lb_ip" "$gateway"
       ;;
     *)
       log_warn "Unsupported platform '${os}'."
@@ -167,18 +149,120 @@ _add_host_route() {
   esac
 }
 
+# macOS-specific route handling
+_add_host_route_darwin() {
+  local lb_ip="$1"
+  local gateway="$2"
+  local existing_gw
+  
+  log_info "Adding host route: ${lb_ip} via ${gateway}…"
+  
+  # Check if a route exists and what gateway it uses
+  existing_gw=$(sudo route -n get "$lb_ip" 2>/dev/null | grep "gateway:" | awk '{print $2}' || true)
+  
+  if [[ -n "$existing_gw" ]]; then
+    if [[ "$existing_gw" == "$gateway" ]]; then
+      log_warn "Route to ${lb_ip} already exists with correct gateway — skipping."
+      return 0
+    else
+      log_warn "Route to ${lb_ip} exists but points to wrong gateway (${existing_gw}, should be ${gateway}). Attempting to fix…"
+      if sudo route -n delete -host "$lb_ip" 2>/dev/null; then
+        log_info "Deleted incorrect route."
+      else
+        log_warn "Could not delete existing route — trying to add anyway."
+      fi
+    fi
+  fi
+  
+  # Add the correct route
+  if sudo route -n add -host "$lb_ip" "$gateway" 2>/dev/null; then
+    log_success "Route added successfully."
+    # Verify it was added with the correct gateway
+    sleep 1
+    local verified_gw
+    verified_gw=$(sudo route -n get "$lb_ip" 2>/dev/null | grep "gateway:" | awk '{print $2}' || true)
+    if [[ "$verified_gw" == "$gateway" ]]; then
+      log_success "Route verified: ${lb_ip} → ${gateway}"
+      return 0
+    else
+      log_warn "Route was added but verification failed. Gateway is ${verified_gw}, expected ${gateway}."
+      return 1
+    fi
+  else
+    log_warn "Could not add route automatically."
+    _print_fallback_instructions "$lb_ip"
+    return 1
+  fi
+}
+
+# Linux-specific route handling
+_add_host_route_linux() {
+  local lb_ip="$1"
+  local gateway="$2"
+  
+  log_info "Adding host route: ${lb_ip} via ${gateway}…"
+  
+  # Check if a route exists
+  local existing_route
+  existing_route=$(ip route get "$lb_ip" 2>/dev/null || true)
+  
+  if [[ -n "$existing_route" ]]; then
+    # Route exists, check if it's correct
+    if echo "$existing_route" | grep -q "$gateway"; then
+      log_warn "Route to ${lb_ip} already exists with correct gateway — skipping."
+      return 0
+    else
+      log_warn "Route to ${lb_ip} exists but points to wrong gateway. Attempting to delete…"
+      if sudo ip route delete "$lb_ip/32" 2>/dev/null; then
+        log_info "Deleted incorrect route."
+      else
+        log_warn "Could not delete existing route — trying to add anyway."
+      fi
+    fi
+  fi
+  
+  # Add the correct route
+  if sudo ip route add "${lb_ip}/32" via "$gateway" 2>/dev/null; then
+    log_success "Route added successfully."
+    # Verify
+    sleep 1
+    if ip route get "$lb_ip" | grep -q "$gateway"; then
+      log_success "Route verified: ${lb_ip} → ${gateway}"
+      return 0
+    else
+      log_warn "Route was added but verification failed."
+      return 1
+    fi
+  else
+    log_warn "Could not add route automatically."
+    _print_fallback_instructions "$lb_ip"
+    return 1
+  fi
+}
+
 _print_fallback_instructions() {
   local lb_ip="$1"
   echo ""
   echo -e "  ${YELLOW}Alternative access methods:${NC}"
   echo ""
   echo "  Option A — Add route manually (requires sudo):"
-  echo "    macOS:  sudo route -n add -host ${lb_ip} \$(docker network inspect kind -f '{{(index .IPAM.Config 0).Gateway}}')"
-  echo "    Linux:  sudo ip route add ${lb_ip}/32 via \$(docker network inspect kind -f '{{(index .IPAM.Config 0).Gateway}}')"
+  echo "    macOS:"
+  echo "      # First, delete any incorrect route:"
+  echo "      sudo route -n delete -host ${lb_ip}"
+  echo "      # Then add the correct route:"
+  echo "      sudo route -n add -host ${lb_ip} \$(docker network inspect kind -f '{{(index .IPAM.Config 0).Gateway}}')"
   echo ""
-  echo "  Option B — kubectl port-forward:"
+  echo "    Linux:"
+  echo "      sudo ip route delete ${lb_ip}/32 || true"
+  echo "      sudo ip route add ${lb_ip}/32 via \$(docker network inspect kind -f '{{(index .IPAM.Config 0).Gateway}}')"
+  echo ""
+  echo "  Option B — kubectl port-forward (always works, no sudo needed):"
   echo "    kubectl port-forward -n ${ARGOCD_NAMESPACE} svc/cilium-gateway-argocd-gateway 8080:80"
   echo "    Then open http://localhost:8080"
+  echo ""
+  echo "  After fixing the route, test with:"
+  echo "    ping ${lb_ip}"
+  echo "    curl http://${lb_ip}"
   echo ""
 }
 

@@ -118,17 +118,35 @@ Opens `http://localhost:8080` → ArgoCD UI. Press Ctrl+C to stop.
 
 ### Option B — Host route (direct access to Gateway IP)
 
-The script attempts this automatically during deploy. If it fails (needs sudo), run manually:
+The script attempts this automatically during deploy. If it fails or you want to set it up manually:
 
 ```bash
-# macOS
-sudo route -n add -host 172.18.0.200 $(docker network inspect kind -f '{{(index .IPAM.Config 0).Gateway}}')
+# 1. Get the Docker bridge gateway
+docker_gateway=$(docker network inspect kind -f '{{(index .IPAM.Config 0).Gateway}}')
+echo "Docker gateway: $docker_gateway"
 
-# Linux
-sudo ip route add 172.18.0.200/32 via $(docker network inspect kind -f '{{(index .IPAM.Config 0).Gateway}}')
+# 2. Get the MetalLB-assigned Gateway IP (or use 172.18.0.200 as default)
+lb_ip=$(kubectl get svc cilium-gateway-argocd-gateway -n argocd -o jsonpath='{.status.loadBalancer.ingress[0].ip}' 2>/dev/null || echo "172.18.0.200")
+echo "LoadBalancer IP: $lb_ip"
+
+# 3. Delete any incorrect existing route
+# macOS:
+sudo route -n delete -host "$lb_ip" 2>/dev/null || true
+# Linux:
+sudo ip route delete "$lb_ip/32" 2>/dev/null || true
+
+# 4. Add the correct route
+# macOS:
+sudo route -n add -host "$lb_ip" "$docker_gateway"
+# Linux:
+sudo ip route add "$lb_ip/32" via "$docker_gateway"
+
+# 5. Test it
+ping "$lb_ip"
+curl http://"$lb_ip"
 ```
 
-Then open `http://172.18.0.200` directly.
+Then open `http://$lb_ip` in your browser.
 
 ### Credentials
 
@@ -247,13 +265,36 @@ kubectl get svc -n argocd | grep gateway     # check LoadBalancer service
 ```
 
 **Gateway IP not reachable from host**
+
+This happens because MetalLB assigns IPs on Docker's internal bridge (172.18.0.0/16), which requires an explicit host route.
+
 ```bash
-# Check host route
+# Check if the route exists and points to the correct gateway
 route -n get 172.18.0.200        # macOS
 ip route get 172.18.0.200        # Linux
 
-# Or use port-forward instead
+# Get the correct Docker bridge gateway
+docker network inspect kind -f '{{(index .IPAM.Config 0).Gateway}}'
+# Example output: 172.18.0.1
+
+# If route doesn't exist OR points to wrong gateway, fix it:
+# macOS
+sudo route -n delete -host 172.18.0.200        # delete any incorrect route
+sudo route -n add -host 172.18.0.200 172.18.0.1
+
+# Linux
+sudo ip route delete 172.18.0.200/32 || true
+sudo ip route add 172.18.0.200/32 via 172.18.0.1
+
+# Verify it works
+ping 172.18.0.200
+curl http://172.18.0.200
+```
+
+**Or use port-forward instead (no sudo required)**
+```bash
 ./setup.sh   # option 9
+# Access via http://localhost:8080
 ```
 
 **ArgoCD not loading (connection refused)**
