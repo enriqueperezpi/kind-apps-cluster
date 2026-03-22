@@ -64,20 +64,30 @@ apply_argocd_apps() {
     return 0
   fi
 
+  # Count all application.yaml files (including in subdirectories)
   local count
-  count=$(find "$apps_dir" -maxdepth 1 -name '*.yaml' -o -name '*.yml' 2>/dev/null | wc -l | tr -d ' ')
+  count=$(find "$apps_dir" -name 'application.yaml' -o -name 'application.yml' 2>/dev/null | wc -l | tr -d ' ')
   if [[ "$count" -eq 0 ]]; then
-    log_warn "No YAML files found in '${apps_dir}'."
+    log_warn "No Application YAML files found in '${apps_dir}'."
+    log_info "Expected structure: ${apps_dir}/<app-name>/application.yaml"
     return 0
   fi
 
-  log_info "Applying ArgoCD Application/ApplicationSet configs from '${apps_dir}'…"
-  for f in "$apps_dir"/*.yaml "$apps_dir"/*.yml; do
-    [[ -f "$f" ]] || continue
-    log_info "  -> $(basename "$f")"
-    kubectl apply -f "$f"
-  done
-  log_success "ArgoCD apps applied."
+  log_info "Applying ArgoCD Applications from '${apps_dir}'…"
+  log_info "Found ${count} application(s)"
+  
+  # Apply all application.yaml files in subdirectories
+  local app_count=0
+  while IFS= read -r -d '' app_file; do
+    local app_name
+    app_name=$(basename "$(dirname "$app_file")")
+    log_info "  -> ${app_name}"
+    kubectl apply -f "$app_file"
+    ((app_count++)) || true
+  done < <(find "$apps_dir" -name 'application.yaml' -o -name 'application.yml' -print0)
+  
+  log_success "Applied ${app_count} ArgoCD application(s)."
+  log_info "Apps will sync automatically. Check status with: argocd app list"
 }
 
 argocd_admin_password() {

@@ -3,18 +3,26 @@ kind: Application
 metadata:
   name: guestbook
   namespace: argocd
+  labels:
+    app: guestbook
+    tier: frontend
 spec:
   project: default
   source:
     repoURL: https://github.com/argoproj/argocd-example-apps.git
     targetRevision: HEAD
     path: guestbook
+    # helm:
+    #   valueFiles:
+    #     - values.yaml  # Uncomment if deploying from Helm chart
   destination:
     server: https://kubernetes.default.svc
-    namespace: default
+    namespace: guestbook
   syncPolicy:
     automated:
       prune: true
       selfHeal: true
     syncOptions:
       - CreateNamespace=true
+      - ServerSideApply=true
+

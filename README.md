@@ -1,6 +1,6 @@
 # kind-apps-cluster
 
-Local Kubernetes cluster with ArgoCD and Envoy ingress — all managed by an idempotent bash script.
+Local Kubernetes cluster with ArgoCD and Nginx ingress — all managed by an idempotent bash script.
 
 ## Architecture
 
@@ -16,10 +16,10 @@ Browser ──► localhost:80 (host machine)
                  ▼
     kind cluster (all nodes with hostNetwork)
     ┌─────────────────────────────────────┐
-    │  Nginx DaemonSet                     │
+    │  Nginx DaemonSet                    │
     │  - hostNetwork: true                │
-    │  - hostPort: 80                      │
-    │  - Routes to argocd-server:80        │
+    │  - hostPort: 80                     │
+    │  - Routes to argocd-server:80       │
     └─────────────────────────────────────┘
                  │
                  ▼
@@ -67,9 +67,9 @@ After the deploy completes:
 ### Interactive Menu
 
 ```
-  1)  Full deploy (cluster + gateway + argocd + apps)
+  1)  Full deploy (cluster + nginx + argocd + apps)
   2)  Create / verify kind cluster only
-  3)  Install Gateway API + cloud-provider-kind
+  3)  Install Nginx reverse proxy (hostNetwork)
   4)  Install ArgoCD
   5)  Apply ArgoCD applications from ./argocd-apps
   6)  Show status of all components
@@ -100,7 +100,7 @@ Available flags:
 
 ## Accessing ArgoCD
 
-After deploy completes, Envoy reverse proxy is running as a NodePort service and listening on `localhost:80`.
+After deploy completes, Nginx reverse proxy is running as a DaemonSet with hostNetwork and listening on `localhost:80`.
 
 **Quick Setup:**
 ```bash
@@ -131,12 +131,12 @@ echo "127.0.0.1 argocd.local" | sudo tee -a /etc/hosts
 | `CLUSTER_NAME` | `kind-apps-cluster` | kind cluster name |
 | `K8S_VERSION` | `v1.33.2` | Kubernetes version (kind node image tag) |
 | `WORKER_NODES` | `1` | Number of worker nodes |
-| `ARGOCD_NAMESPACE` | `argocd` | Namespace for ArgoCD and Envoy |
+| `ARGOCD_NAMESPACE` | `argocd` | Namespace for ArgoCD and Nginx reverse proxy |
 | `ARGOCD_VERSION` | `stable` | ArgoCD manifest version |
 | `ARGOCD_APPS_DIR` | `./argocd-apps` | Directory with Application/ApplicationSet YAMLs |
 | `AUTO_INSTALL_TOOLS` | `true` | Auto-install missing CLI tools |
-| `HTTP_PORT` | `80` | Host port mapped to Envoy NodePort |
-| `HTTPS_PORT` | `443` | Host port mapped to Envoy NodePort (future) |
+| `HTTP_PORT` | `80` | Host port bound by Nginx (hostNetwork) |
+| `HTTPS_PORT` | `443` | Host port bound by Nginx (future) |
 
 ## Components
 
@@ -148,10 +148,22 @@ echo "127.0.0.1 argocd.local" | sudo tee -a /etc/hosts
 
 ## Deploying Applications
 
-Drop `Application` or `ApplicationSet` YAML files into `argocd-apps/`. They are applied during full deploy or via menu option 6.
+Each application gets its own folder under `argocd-apps/` with an `application.yaml` file:
+
+```
+argocd-apps/
+├── guestbook/
+│   ├── application.yaml       # ArgoCD Application CRD
+│   └── values.yaml           # Helm values (optional)
+└── your-app/
+    ├── application.yaml
+    └── values.yaml
+```
+
+### Quick Example
 
 ```yaml
-# argocd-apps/my-app.yaml
+# argocd-apps/my-app/application.yaml
 apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata:
@@ -170,7 +182,11 @@ spec:
     automated:
       prune: true
       selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
 ```
+
+Apps are applied during full deploy or via menu option 5. See [`argocd-apps/README.md`](argocd-apps/README.md) for detailed documentation.
 
 ## Project Structure
 
@@ -182,11 +198,16 @@ kind-apps-cluster/
 │   ├── utils.sh            # Logging, wait helpers
 │   ├── tools.sh            # Tool detection & installation
 │   ├── kind.sh             # kind cluster lifecycle (health checks)
-│   ├── argocd.sh           # ArgoCD install, insecure config, port-forward
+│   ├── argocd.sh           # ArgoCD install, insecure config, apps deployer
 │   └── gateway-api.sh      # Nginx reverse proxy + hostNetwork DaemonSet
-├── argocd-apps/
-│   ├── README.md
-│   └── example-guestbook.yaml
+├── argocd-apps/            # ArgoCD Application definitions
+│   ├── README.md           # Apps deployment guide
+│   ├── guestbook/          # Example app
+│   │   ├── application.yaml
+│   │   └── values.yaml
+│   └── (your-apps)/        # Add your apps here
+│       ├── application.yaml
+│       └── values.yaml
 └── docs/
     └── architecture.drawio  # Editable diagram (open in draw.io)
 ```
