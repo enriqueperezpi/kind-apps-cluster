@@ -19,10 +19,20 @@ _cluster_healthy() {
 }
 
 generate_kind_config() {
+  # Check if using Cilium CNI
+  local cni_plugin=""
+  if [[ "${CNI_PLUGIN:-kind}" == "cilium" ]]; then
+    cni_plugin="none"
+  fi
+
   cat <<EOF
 kind: Cluster
 apiVersion: kind.x-k8s.io/v1alpha4
 name: ${CLUSTER_NAME}
+networking:
+  disableDefaultCNI: $([[ "$cni_plugin" == "none" ]] && echo "true" || echo "false")
+  podSubnet: "10.244.0.0/16"
+  serviceSubnet: "10.96.0.0/16"
 nodes:
 - role: control-plane
   kubeadmConfigPatches:
@@ -31,19 +41,34 @@ nodes:
     nodeRegistration:
       kubeletExtraArgs:
         node-labels: "ingress-ready=true"
+        cni-bin-dir: $([[ "$cni_plugin" == "none" ]] && echo "/opt/cni/bin" || echo "")
+  extraMounts:
+  - hostPath: /sys/kernel/bpf
+    containerPath: /sys/kernel/bpf
+    readOnly: true
+  - hostPath: /run/cilium
+    containerPath: /run/cilium
   extraPortMappings:
   - containerPort: 80
     hostPort: ${HTTP_PORT}
     protocol: TCP
-    listenAddress: "0.0.0.0" # Ensure listening on host
+    listenAddress: "0.0.0.0"
   - containerPort: 443
     hostPort: ${HTTPS_PORT}
     protocol: TCP
-    listenAddress: "0.0.0.0" # Ensure listening on host
+    listenAddress: "0.0.0.0"
 EOF
 
   for i in $(seq 1 "${WORKER_NODES}"); do
-    echo "- role: worker"
+    cat <<EOF
+- role: worker
+  extraMounts:
+  - hostPath: /sys/kernel/bpf
+    containerPath: /sys/kernel/bpf
+    readOnly: true
+  - hostPath: /run/cilium
+    containerPath: /run/cilium
+EOF
   done
 }
 

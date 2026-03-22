@@ -1,34 +1,43 @@
 # kind-apps-cluster
 
-Local Kubernetes cluster with ArgoCD and Nginx ingress — all managed by an idempotent bash script.
+Local Kubernetes cluster with ArgoCD and Cilium Gateway API — all managed by an idempotent bash script.
 
 ## Architecture
 
 > Editable diagram: [`docs/architecture.drawio`](docs/architecture.drawio) — open in [draw.io](https://app.diagrams.net/).
 
-**Key design:** Uses **Nginx reverse proxy as a DaemonSet with hostNetwork** to route traffic from the host's port 80 directly to the ArgoCD service. Works seamlessly on macOS, Windows, and Linux.
+**Key design:** Uses **Cilium CNI** as the networking layer with **Gateway API** for HTTP routing. Each application gets a **HTTPRoute** for public access. This is the modern, standard approach for Kubernetes ingress.
 
 ### How traffic reaches ArgoCD
 
 ```
-Browser ──► localhost:80 (host machine)
-                 │
-                 ▼
-    kind cluster (all nodes with hostNetwork)
-    ┌─────────────────────────────────────┐
-    │  Nginx DaemonSet                    │
-    │  - hostNetwork: true                │
-    │  - hostPort: 80                     │
-    │  - Routes to argocd-server:80       │
-    └─────────────────────────────────────┘
-                 │
-                 ▼
-     ArgoCD Pod (HTTP, insecure mode)
+Browser ──► argocd.local (host machine)
+                  │
+                  ▼
+         kind cluster with Cilium CNI
+     ┌─────────────────────────────────────┐
+     │  Cilium Gateway API Controller       │
+     │  - Manages Gateway resources        │
+     │  - Configures L7 routing            │
+     └─────────────────────────────────────┘
+                  │
+                  ▼
+         Gateway + HTTPRoute
+     ┌─────────────────────────────────────┐
+     │  Gateway: cilium-gateway            │
+     │  HTTPRoute: argocd.local → :80     │
+     └─────────────────────────────────────┘
+                  │
+                  ▼
+      ArgoCD Service (ClusterIP:80)
+                  │
+                  ▼
+      ArgoCD Pod (HTTP, insecure mode)
 ```
 
 **Access:** Add `127.0.0.1 argocd.local` to `/etc/hosts` and visit `http://argocd.local`
 
-Nginx is deployed as a **DaemonSet with hostNetwork**, which binds directly to each node's port 80. This works on macOS, Windows, and Linux because it uses standard host networking.
+**Adding new apps:** Create a HTTPRoute in your app's folder to expose it at `http://appname.local`
 
 ## Prerequisites
 
@@ -131,19 +140,23 @@ echo "127.0.0.1 argocd.local" | sudo tee -a /etc/hosts
 | `CLUSTER_NAME` | `kind-apps-cluster` | kind cluster name |
 | `K8S_VERSION` | `v1.33.2` | Kubernetes version (kind node image tag) |
 | `WORKER_NODES` | `1` | Number of worker nodes |
-| `ARGOCD_NAMESPACE` | `argocd` | Namespace for ArgoCD and Nginx reverse proxy |
+| `CNI_PLUGIN` | `cilium` | CNI plugin (cilium, kind) — Cilium enables Gateway API |
+| `CILIUM_VERSION` | `1.17.2` | Cilium version (if using Cilium) |
+| `GATEWAY_CLASS_NAME` | `cilium` | Gateway API controller class |
+| `ARGOCD_NAMESPACE` | `argocd` | Namespace for ArgoCD and Gateway |
 | `ARGOCD_VERSION` | `stable` | ArgoCD manifest version |
 | `ARGOCD_APPS_DIR` | `./argocd-apps` | Directory with Application/ApplicationSet YAMLs |
 | `AUTO_INSTALL_TOOLS` | `true` | Auto-install missing CLI tools |
-| `HTTP_PORT` | `80` | Host port bound by Nginx (hostNetwork) |
-| `HTTPS_PORT` | `443` | Host port bound by Nginx (future) |
+| `HTTP_PORT` | `80` | Host port exposed by kind node |
+| `HTTPS_PORT` | `443` | Host port exposed by kind node |
 
 ## Components
 
 | Component | Purpose |
 |-----------|---------|
 | **kind** | Local K8s cluster running in Docker |
-| **Nginx** | Reverse proxy (DaemonSet with hostNetwork) — binds to host port 80 for HTTP routing to ArgoCD |
+| **Cilium** | CNI + Gateway API controller — L4/L7 networking and HTTP routing |
+| **Gateway API** | Standard ingress API (Gateway, HTTPRoute CRDs) |
 | **ArgoCD** | GitOps continuous delivery — deploys apps from `argocd-apps/` |
 
 ## Deploying Applications
@@ -195,6 +208,28 @@ kind-apps-cluster/
 ├── setup.sh                # Main entry point (menu + non-interactive)
 ├── config.conf             # All configurable parameters
 ├── lib/
+│   ├── utils.sh           # Logging, wait helpers
+│   ├── tools.sh            # Tool detection & installation
+│   ├── kind.sh            # kind cluster lifecycle + Cilium config
+│   ├── argocd.sh          # ArgoCD install, insecure config, apps deployer
+│   └── gateway-api.sh     # Cilium Gateway API controller
+├── argocd-apps/           # ArgoCD Application definitions + HTTPRoutes
+│   ├── README.md          # Apps deployment guide
+│   ├── guestbook/         # Example app
+│   │   ├── application.yaml
+│   │   ├── httproute.yaml
+│   │   └── values.yaml
+│   └── (your-apps)/       # Add your apps here
+│       ├── application.yaml
+│       ├── httproute.yaml
+│       └── values.yaml
+└── docs/
+    └── architecture.drawio  # Editable diagram (open in draw.io)
+```
+kind-apps-cluster/
+├── setup.sh                # Main entry point (menu + non-interactive)
+├── config.conf             # All configurable parameters
+├── lib/
 │   ├── utils.sh            # Logging, wait helpers
 │   ├── tools.sh            # Tool detection & installation
 │   ├── kind.sh             # kind cluster lifecycle (health checks)
@@ -217,9 +252,9 @@ kind-apps-cluster/
 The script is safe to re-run at any time:
 
 - **Cluster**: detects unhealthy containers and recreates automatically.
+- **Cilium**: Helm upgrade reconciles to desired state.
 - **Helm charts** (ArgoCD): `helm upgrade --install` reconciles to desired state.
-- **Nginx reverse proxy**: DaemonSet is recreated if pods crash.
-- **ArgoCD**: config set via `argocd-cmd-params-cm` ConfigMap + rollout restart.
+- **HTTPRoutes**: naturally idempotent via `kubectl apply`.
 - **ArgoCD apps**: `kubectl apply` is naturally idempotent.
 
 ## Troubleshooting
@@ -239,34 +274,45 @@ ERROR: failed to create cluster: could not find a container runtime
 grep "argocd.local" /etc/hosts
 # Should show: 127.0.0.1 argocd.local
 
-# 2. Verify Nginx DaemonSet is running on all nodes
-kubectl get daemonset -n argocd ingress-proxy
+# 2. Check Cilium is running
+kubectl get pods -n cilium -l k8s-app=cilium
 
-# 3. Check Nginx pods
-kubectl get pods -n argocd -l app=ingress-proxy -o wide
+# 3. Check Gateway status
+kubectl get gateway cilium-gateway -n argocd
 
-# 4. Test connectivity
-curl http://localhost:80
+# 4. Check HTTPRoute
+kubectl get httproute argocd -n argocd
 
-# 5. Check Nginx logs
-kubectl logs -n argocd -l app=ingress-proxy --tail=10
+# 5. Test connectivity
+curl -H "Host: argocd.local" http://localhost:80
 ```
 
-**Nginx pods not running or crashing**
+**Cilium not installed or failing**
 ```bash
-# Check pod status
-kubectl describe pod -n argocd -l app=ingress-proxy
+# Check Cilium pods
+kubectl get pods -n cilium
 
-# View pod logs
-kubectl logs -n argocd -l app=ingress-proxy --tail=20
+# View Cilium logs
+kubectl logs -n cilium -l k8s-app=cilium --tail=50
 
-# Verify ConfigMap
-kubectl get configmap ingress-proxy-config -n argocd -o yaml
+# Describe Cilium operator
+kubectl describe pods -n cilium -l k8s-app=cilium-operator
 
-# Check if port 80 is already in use on the host
-netstat -tulpn | grep :80
-# or on macOS:
-lsof -i :80
+# Reinstall Cilium
+helm upgrade cilium cilium/cilium --namespace cilium \
+  --set gatewayAPI.enabled=true
+```
+
+**HTTPRoute not routing**
+```bash
+# Check HTTPRoute status
+kubectl describe httproute argocd -n argocd
+
+# Check if Gateway accepts the route
+kubectl get gateway cilium-gateway -n argocd -o yaml | grep -A 10 status
+
+# Check Cilium Gateway API status
+cilium gateway status
 ```
 
 **ArgoCD UI not loading**
@@ -277,17 +323,14 @@ kubectl port-forward -n argocd svc/argocd-server 8080:80      # manual port-forw
 # Then visit http://localhost:8080
 ```
 
-**DNS not resolving `argocd.local` on macOS**
+**DNS not resolving `*.local` on macOS**
 ```bash
-# Verify it's in /etc/hosts
-cat /etc/hosts | grep argocd.local
-
 # Flush DNS cache on macOS
 sudo dscacheutil -flushcache
 sudo killall -HUP mDNSResponder
 
-# Test resolution
-nslookup argocd.local
+# Verify /etc/hosts
+cat /etc/hosts | grep local
 ```
 
 **Reset everything**

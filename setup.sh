@@ -149,11 +149,11 @@ action_port_forward_argocd() {
 
 # ── Menu ─────────────────────────────────────────────────────
 show_menu() {
-  header "kind-apps-cluster  —  Local K8s + ArgoCD"
+  header "kind-apps-cluster  —  Local K8s + ArgoCD + Cilium"
   echo ""
-  echo -e "  ${BOLD}1)${NC} Full deploy (cluster + nginx + argocd + apps)"
+  echo -e "  ${BOLD}1)${NC} Full deploy (cluster + cilium + argocd + apps)"
   echo -e "  ${BOLD}2)${NC} Create / verify kind cluster only"
-  echo -e "  ${BOLD}3)${NC} Install Nginx reverse proxy (hostNetwork)"
+  echo -e "  ${BOLD}3)${NC} Install Gateway API + Cilium controller"
   echo -e "  ${BOLD}4)${NC} Install ArgoCD"
   echo -e "  ${BOLD}5)${NC} Apply ArgoCD applications from ${ARGOCD_APPS_DIR}"
   echo -e "  ${BOLD}6)${NC} Show status of all components"

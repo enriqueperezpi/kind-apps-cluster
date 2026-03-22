@@ -1,30 +1,42 @@
 # ArgoCD Applications
 
-This directory contains ArgoCD Application definitions for GitOps-managed workloads.
+This directory contains ArgoCD Application definitions for GitOps-managed workloads, plus optional Gateway API routing configurations.
+
+## Architecture
+
+```
+Browser ──► Host:80 ──► Cilium Gateway ──► HTTPRoute ──► Service ──► Pod
+                    (Gateway API Controller)
+```
+
+- **Cilium** handles networking and Gateway API routing
+- **HTTPRoutes** define HTTP routing rules per app
+- **Apps** are deployed by ArgoCD and exposed via HTTPRoutes
 
 ## Directory Structure
 
 ```
 argocd-apps/
-├── README.md                  # This file
-├── guestbook/                 # Example app
-│   ├── application.yaml       # ArgoCD Application CRD
-│   └── values.yaml           # Helm values (optional, if using Helm)
-└── your-app/                  # Your app
-    ├── application.yaml       # ArgoCD Application CRD
-    ├── values.yaml           # Helm values (optional)
-    └── (other configs)        # Any additional K8s manifests
+├── README.md                    # This file
+├── guestbook/                   # Example app
+│   ├── application.yaml        # ArgoCD Application CRD
+│   ├── httproute.yaml          # Gateway API routing (optional)
+│   └── values.yaml             # Helm values (optional)
+└── your-app/                   # Your app
+    ├── application.yaml        # ArgoCD Application CRD
+    ├── httproute.yaml          # Gateway API routing (optional)
+    └── values.yaml             # Helm values (optional)
 ```
 
 ## Adding Applications
 
-### 1. Create an app directory
+### 1. Create app directory
 
 ```bash
 mkdir -p argocd-apps/your-app
 ```
 
-### 2. Create an Application CRD
+### 2. Create ArgoCD Application CRD
 
 ```yaml
 # argocd-apps/your-app/application.yaml
@@ -43,22 +55,43 @@ spec:
     # helm:
     #   valueFiles:
     #     - values.yaml
-    #   parameters:              # Optional overrides
-    #     - name: replicaCount
-    #       value: "2"
   destination:
     server: https://kubernetes.default.svc
-    namespace: your-app-namespace
+    namespace: your-app
   syncPolicy:
     automated:
-      prune: true    # Remove old resources
-      selfHeal: true # Auto-sync drift
+      prune: true
+      selfHeal: true
     syncOptions:
       - CreateNamespace=true
-      - ServerSideApply=true
 ```
 
-### 3. (Optional) Add Helm values
+### 3. (Optional) Create HTTPRoute for public access
+
+```yaml
+# argocd-apps/your-app/httproute.yaml
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: your-app
+  namespace: your-app
+spec:
+  parentRefs:
+  - name: cilium-gateway
+    namespace: argocd
+  hostnames:
+  - "your-app.local"
+  rules:
+  - matches:
+    - path:
+        type: PathPrefix
+        value: /
+    backendRefs:
+    - name: your-app-service
+      port: 80
+```
+
+### 4. (Optional) Add Helm values
 
 ```yaml
 # argocd-apps/your-app/values.yaml
@@ -71,29 +104,40 @@ image:
 service:
   type: ClusterIP
   port: 8080
-
-ingress:
-  enabled: true
-  annotations:
-    nginx.ingress.kubernetes.io/rewrite-target: /
-  hosts:
-    - host: your-app.local
-      paths:
-        - path: /
-          pathType: Prefix
 ```
 
-### 4. (Optional) Add other K8s resources
+## Gateway API Routing
 
-You can include any additional Kubernetes manifests in the app directory:
+Apps that want to be publicly accessible via `http://appname.local` need a **HTTPRoute**.
 
-```
-argocd-apps/your-app/
-├── application.yaml
-├── values.yaml
-├── configmap.yaml    # Additional ConfigMaps
-├── secret.yaml       # Secrets (use SealedSecrets in prod!)
-└── networkpolicy.yaml
+### HTTPRoute Fields Explained
+
+| Field | Description |
+|-------|-------------|
+| `parentRefs` | Links to the Gateway (`cilium-gateway` in `argocd` namespace) |
+| `hostnames` | DNS names to match (add to `/etc/hosts`) |
+| `rules` | Routing rules with path matching |
+| `backendRefs` | Target service and port |
+
+### Multiple Paths
+
+```yaml
+spec:
+  rules:
+  - matches:
+    - path:
+        type: Exact
+        value: /api
+    backendRefs:
+    - name: api-service
+      port: 8080
+  - matches:
+    - path:
+        type: PathPrefix
+        value: /
+    backendRefs:
+    - name: web-service
+      port: 80
 ```
 
 ## Deploying Apps
@@ -104,47 +148,72 @@ Apps are deployed automatically during:
 
 Or manually:
 ```bash
-# List apps
+# Apply ArgoCD Applications
+kubectl apply -f argocd-apps/your-app/application.yaml
+
+# Apply HTTPRoutes
+kubectl apply -f argocd-apps/your-app/httproute.yaml
+
+# List apps in ArgoCD
 argocd app list
 
 # Sync an app
 argocd app sync your-app
+```
 
-# View app status
-argocd app get your-app
+## Accessing Apps
+
+After deploying with HTTPRoute:
+
+```bash
+# 1. Add to /etc/hosts
+echo "127.0.0.1 your-app.local" | sudo tee -a /etc/hosts
+
+# 2. Visit in browser
+http://your-app.local
 ```
 
 ## Removing an App
 
 ```bash
-# Delete the Application CRD
+# Delete ArgoCD Application
 kubectl delete -f argocd-apps/your-app/application.yaml
 
-# Remove the directory
+# Delete HTTPRoute (if exists)
+kubectl delete -f argocd-apps/your-app/httproute.yaml
+
+# Remove directory
 rm -rf argocd-apps/your-app
 ```
 
 ## Best Practices
 
-1. **One app per directory** — Keeps things organized
-2. **Use namespaces** — Create dedicated namespaces per app
-3. **Sync policy** — Enable `prune` and `selfHeal` for auto-remediation
-4. **Helm values** — Keep values in the app directory for portability
-5. **ServerSideApply** — Use for better field ownership tracking
-6. **Secrets** — Never commit raw secrets; use SealedSecrets or external secrets
+1. **One directory per app** — Keeps resources organized
+2. **Use namespaces** — Each app in its own namespace
+3. **Sync policy** — Enable `prune` and `selfHeal` for GitOps
+4. **HTTPRoutes** — Only create if app needs public access
+5. **Helm values** — Keep in app directory for portability
+6. **DNS** — Update `/etc/hosts` for each new hostname
 
 ## Example Apps
 
-- **guestbook/** — Simple web app from ArgoCD examples (git-sourced manifests)
+- **guestbook/** — Simple web app with HTTPRoute for routing
 
-## Accessing Deployed Apps
+## Troubleshooting
 
-Apps deployed to the cluster are accessible at `http://<app-name>.local` if:
-1. Added to `/etc/hosts`: `127.0.0.1 your-app.local`
-2. Nginx reverse proxy routes to the app's service
-
-For services not exposed via Nginx, use:
 ```bash
-kubectl port-forward svc/your-service 8080:80
-# Then visit http://localhost:8080
+# Check Gateway status
+kubectl get gateway cilium-gateway -n argocd
+
+# Check HTTPRoutes
+kubectl get httproute --all-namespaces
+
+# Describe HTTPRoute
+kubectl describe httproute your-app -n your-app
+
+# Check Cilium pods
+kubectl get pods -n cilium
+
+# View Cilium Gateway status
+cilium gateway status
 ```
