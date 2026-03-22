@@ -1,192 +1,148 @@
 #!/usr/bin/env bash
-# gateway-api.sh — Envoy reverse proxy + NodePort ingress for local k8s
+# gateway-api.sh — Nginx reverse proxy with hostNetwork for local k8s
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 source "${SCRIPT_DIR}/lib/utils.sh"
 
-_envoy_running() {
-  kubectl get deployment envoy-ingress -n "${ARGOCD_NAMESPACE}" &>/dev/null
+_ingress_proxy_running() {
+  kubectl get daemonset ingress-proxy -n "${ARGOCD_NAMESPACE}" &>/dev/null
 }
 
-install_envoy_reverse_proxy() {
-  log_info "Installing Envoy reverse proxy (NodePort ingress)…"
+install_ingress_proxy() {
+  log_info "Installing Nginx reverse proxy (hostNetwork DaemonSet)…"
+
+  # Get ArgoCD service ClusterIP
+  local argocd_ip
+  argocd_ip=$(kubectl get svc argocd-server -n "${ARGOCD_NAMESPACE}" -o jsonpath='{.spec.clusterIP}' 2>/dev/null || echo "argocd-server")
+  
+  # Get kube-dns IP for resolver
+  local dns_ip
+  dns_ip=$(kubectl get svc -n kube-system kube-dns -o jsonpath='{.spec.clusterIP}' 2>/dev/null || echo "10.96.0.10")
 
   # Ensure namespace exists
   kubectl create namespace "$ARGOCD_NAMESPACE" --dry-run=client -o yaml | kubectl apply -f -
 
-  # Create Envoy ConfigMap with routing configuration
-  # This routes all requests to argocd-server on port 80
-  # Additional services can be added by modifying this ConfigMap
+  # Create Nginx ConfigMap
+  # Routes all requests from host port 80 to ArgoCD service
   kubectl apply -f - <<EOF
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: envoy-config
+  name: ingress-proxy-config
   namespace: ${ARGOCD_NAMESPACE}
 data:
-  envoy.yaml: |
-    static_resources:
-      listeners:
-      - name: listener_0
-        address:
-          socket_address:
-            address: 0.0.0.0
-            port_value: 8080
-        filter_chains:
-        - filters:
-          - name: envoy.filters.network.http_connection_manager
-            typed_config:
-              "@type": type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager
-              stat_prefix: ingress_http
-              codec_type: AUTO
-              route_config:
-                name: local_route
-                virtual_hosts:
-                - name: argocd_vhost
-                  domains: ["*"]
-                  routes:
-                  - match:
-                      prefix: "/"
-                    route:
-                      cluster: argocd-cluster
-                      timeout: 30s
-              http_filters:
-              - name: envoy.filters.http.router
-                typed_config:
-                  "@type": type.googleapis.com/envoy.extensions.filters.http.router.v3.Router
-      clusters:
-      - name: argocd-cluster
-        connect_timeout: 5s
-        type: LOGICAL_DNS
-        dns_lookup_family: V4_ONLY
-        load_assignment:
-          cluster_name: argocd-cluster
-          endpoints:
-          - lb_endpoints:
-            - endpoint:
-                address:
-                  socket_address:
-                    address: argocd-server.${ARGOCD_NAMESPACE}.svc.cluster.local
-                    port_value: 80
-        health_checks:
-        - timeout: 5s
-          interval: 10s
-          unhealthy_threshold: 2
-          healthy_threshold: 2
-          http_health_check:
-            path: "/"
-            expected_statuses:
-            - start: 200
-              end: 399
-    admin:
-      access_log_path: /tmp/admin_access.log
-      address:
-        socket_address:
-          address: 127.0.0.1
-          port_value: 9901
+  default.conf: |
+    server {
+        listen 80;
+        server_name _;
+        
+        location / {
+            proxy_pass http://${argocd_ip}:80;
+            proxy_set_header Host \$host;
+            proxy_set_header X-Real-IP \$remote_addr;
+            proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-Proto \$scheme;
+        }
+    }
 EOF
 
-  # Deploy Envoy as Deployment
+  # Deploy Nginx as DaemonSet with hostNetwork
+  # Runs on ALL nodes (control-plane + workers) with tolerations
+  # Binds directly to host port 80
   kubectl apply -f - <<EOF
 apiVersion: apps/v1
-kind: Deployment
+kind: DaemonSet
 metadata:
-  name: envoy-ingress
+  name: ingress-proxy
   namespace: ${ARGOCD_NAMESPACE}
+  labels:
+    app: ingress-proxy
 spec:
-  replicas: 1
   selector:
     matchLabels:
-      app: envoy-ingress
+      app: ingress-proxy
   template:
     metadata:
       labels:
-        app: envoy-ingress
+        app: ingress-proxy
     spec:
+      hostNetwork: true
+      # Tolerate control-plane NoSchedule taint
+      tolerations:
+      - key: node-role.kubernetes.io/control-plane
+        operator: Exists
+        effect: NoSchedule
       containers:
-      - name: envoy
-        image: envoyproxy/envoy:v1.27-latest
+      - name: nginx
+        image: nginx:alpine
         ports:
-        - containerPort: 8080
+        - containerPort: 80
+          hostPort: 80
           name: http
           protocol: TCP
         volumeMounts:
-        - name: envoy-config
-          mountPath: /etc/envoy
-        args:
-        - /usr/local/bin/envoy
-        - "-c"
-        - "/etc/envoy/envoy.yaml"
-        - "-l"
-        - "info"
+        - name: nginx-config
+          mountPath: /etc/nginx/conf.d
+          readOnly: true
         resources:
           requests:
-            cpu: 100m
-            memory: 128Mi
+            cpu: 50m
+            memory: 64Mi
           limits:
-            cpu: 500m
-            memory: 256Mi
+            cpu: 200m
+            memory: 128Mi
       volumes:
-      - name: envoy-config
+      - name: nginx-config
         configMap:
-          name: envoy-config
----
-apiVersion: v1
-kind: Service
-metadata:
-  name: envoy-ingress
-  namespace: ${ARGOCD_NAMESPACE}
-spec:
-  type: NodePort
-  selector:
-    app: envoy-ingress
-  ports:
-  - name: http
-    port: 80
-    targetPort: 8080
-    nodePort: ${HTTP_PORT}
-    protocol: TCP
+          name: ingress-proxy-config
 EOF
 
-  log_success "Envoy reverse proxy deployed as NodePort service."
-  log_info "Envoy is listening on all nodes at port ${HTTP_PORT} (NodePort)"
+  # Wait for pods to be ready
+  log_info "Waiting for ingress proxy to start on all nodes…"
+  sleep 5
+
+  # Verify pods are running
+  local pod_count
+  pod_count=$(kubectl get pods -n "${ARGOCD_NAMESPACE}" -l app=ingress-proxy --no-headers 2>/dev/null | wc -l)
+  if [[ "$pod_count" -ge 1 ]]; then
+    log_success "Nginx reverse proxy deployed (${pod_count} pod(s) with hostNetwork)."
+    log_info "Listening on host port 80 → routes to ArgoCD"
+  else
+    log_warn "Ingress proxy pods not ready yet. Check status with: kubectl get pods -n ${ARGOCD_NAMESPACE} -l app=ingress-proxy"
+  fi
 }
 
 create_argocd_gateway() {
-  # No longer needed with Envoy approach, but keep function for backward compatibility
-  log_info "Envoy reverse proxy is already routing to ArgoCD."
+  log_info "Nginx reverse proxy is routing to ArgoCD."
+  log_info "Access ArgoCD at: http://localhost:80"
+  log_info "Add to /etc/hosts: echo '127.0.0.1 argocd.local' | sudo tee -a /etc/hosts"
 }
 
 install_gateway_api() {
-  install_envoy_reverse_proxy
+  install_ingress_proxy
   create_argocd_gateway
 }
 
 gateway_api_status() {
   echo ""
-  if _envoy_running; then
-    log_success "Envoy reverse proxy is running."
+  if _ingress_proxy_running; then
+    log_success "Nginx reverse proxy (DaemonSet) is running."
     
-    # Show envoy pod status
-    local pod_status
-    pod_status=$(kubectl get pods -n "${ARGOCD_NAMESPACE}" -l app=envoy-ingress -o jsonpath='{.items[0].status.phase}' 2>/dev/null || echo "unknown")
-    echo "  Pod status: ${pod_status}"
+    # Show pod status per node
+    kubectl get pods -n "${ARGOCD_NAMESPACE}" -l app=ingress-proxy -o wide
     
-    # Show service status
-    local nodeport
-    nodeport=$(kubectl get svc envoy-ingress -n "${ARGOCD_NAMESPACE}" -o jsonpath='{.spec.ports[0].nodePort}' 2>/dev/null || echo "pending")
-    echo "  NodePort: ${nodeport}"
+    # Show which port it's bound to
+    echo "  Host binding: port 80 (hostNetwork)"
   else
-    log_warn "Envoy reverse proxy is NOT running."
-    log_info "Deploy it with: kubectl apply -f lib/gateway-api.sh"
+    log_warn "Nginx reverse proxy is NOT running."
   fi
 
   if kubectl get svc argocd-server -n "${ARGOCD_NAMESPACE}" &>/dev/null; then
     log_success "ArgoCD service (argocd-server) exists."
-    local svc_port
-    svc_port=$(kubectl get svc argocd-server -n "${ARGOCD_NAMESPACE}" -o jsonpath='{.spec.ports[0].port}' 2>/dev/null || echo "unknown")
-    echo "  Service port: ${svc_port}"
+    local argocd_port
+    argocd_port=$(kubectl get svc argocd-server -n "${ARGOCD_NAMESPACE}" -o jsonpath='{.spec.ports[0].port}' 2>/dev/null || echo "unknown")
+    echo "  ArgoCD port: ${argocd_port}"
   else
     log_warn "ArgoCD service (argocd-server) does NOT exist."
   fi

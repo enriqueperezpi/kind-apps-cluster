@@ -6,7 +6,7 @@ Local Kubernetes cluster with ArgoCD and Envoy ingress — all managed by an ide
 
 > Editable diagram: [`docs/architecture.drawio`](docs/architecture.drawio) — open in [draw.io](https://app.diagrams.net/).
 
-**Key design:** Uses **Envoy reverse proxy as NodePort service** to route traffic from the host to services in the cluster. Works seamlessly on macOS, Windows, and Linux.
+**Key design:** Uses **Nginx reverse proxy as a DaemonSet with hostNetwork** to route traffic from the host's port 80 directly to the ArgoCD service. Works seamlessly on macOS, Windows, and Linux.
 
 ### How traffic reaches ArgoCD
 
@@ -14,13 +14,13 @@ Local Kubernetes cluster with ArgoCD and Envoy ingress — all managed by an ide
 Browser ──► localhost:80 (host machine)
                  │
                  ▼
-    kind cluster port mapping (80 → NodePort)
-                 │
-                 ▼
-        Envoy Reverse Proxy (NodePort)
-                 │
-                 ▼
-      argocd-server Service (port 80)
+    kind cluster (all nodes with hostNetwork)
+    ┌─────────────────────────────────────┐
+    │  Nginx DaemonSet                     │
+    │  - hostNetwork: true                │
+    │  - hostPort: 80                      │
+    │  - Routes to argocd-server:80        │
+    └─────────────────────────────────────┘
                  │
                  ▼
      ArgoCD Pod (HTTP, insecure mode)
@@ -28,9 +28,7 @@ Browser ──► localhost:80 (host machine)
 
 **Access:** Add `127.0.0.1 argocd.local` to `/etc/hosts` and visit `http://argocd.local`
 
-Envoy handles **routing from external requests to internal services**. The NodePort service exposes Envoy on port 80 (HTTP) and 443 (HTTPS) on all cluster nodes, which kind maps to the host machine.
-
-**To add more services:** Create new backend clusters in the Envoy ConfigMap and route hostnames to them.
+Nginx is deployed as a **DaemonSet with hostNetwork**, which binds directly to each node's port 80. This works on macOS, Windows, and Linux because it uses standard host networking.
 
 ## Prerequisites
 
@@ -145,7 +143,7 @@ echo "127.0.0.1 argocd.local" | sudo tee -a /etc/hosts
 | Component | Purpose |
 |-----------|---------|
 | **kind** | Local K8s cluster running in Docker |
-| **Envoy** | Reverse proxy for HTTP/HTTPS routing — deployed as NodePort service on port 80/443 |
+| **Nginx** | Reverse proxy (DaemonSet with hostNetwork) — binds to host port 80 for HTTP routing to ArgoCD |
 | **ArgoCD** | GitOps continuous delivery — deploys apps from `argocd-apps/` |
 
 ## Deploying Applications
@@ -185,7 +183,7 @@ kind-apps-cluster/
 │   ├── tools.sh            # Tool detection & installation
 │   ├── kind.sh             # kind cluster lifecycle (health checks)
 │   ├── argocd.sh           # ArgoCD install, insecure config, port-forward
-│   └── gateway-api.sh      # Envoy reverse proxy + NodePort service
+│   └── gateway-api.sh      # Nginx reverse proxy + hostNetwork DaemonSet
 ├── argocd-apps/
 │   ├── README.md
 │   └── example-guestbook.yaml
@@ -199,7 +197,7 @@ The script is safe to re-run at any time:
 
 - **Cluster**: detects unhealthy containers and recreates automatically.
 - **Helm charts** (ArgoCD): `helm upgrade --install` reconciles to desired state.
-- **Envoy reverse proxy**: deployment is recreated if unhealthy.
+- **Nginx reverse proxy**: DaemonSet is recreated if pods crash.
 - **ArgoCD**: config set via `argocd-cmd-params-cm` ConfigMap + rollout restart.
 - **ArgoCD apps**: `kubectl apply` is naturally idempotent.
 
@@ -220,30 +218,34 @@ ERROR: failed to create cluster: could not find a container runtime
 grep "argocd.local" /etc/hosts
 # Should show: 127.0.0.1 argocd.local
 
-# 2. Verify Envoy is running
-kubectl get pods -n argocd -l app=envoy-ingress
+# 2. Verify Nginx DaemonSet is running on all nodes
+kubectl get daemonset -n argocd ingress-proxy
 
-# 3. Check Envoy service and NodePort
-kubectl get svc envoy-ingress -n argocd
+# 3. Check Nginx pods
+kubectl get pods -n argocd -l app=ingress-proxy -o wide
 
-# 4. Verify ArgoCD service is accessible
-kubectl get svc argocd-server -n argocd
+# 4. Test connectivity
+curl http://localhost:80
 
-# 5. Test from within cluster
-kubectl run -it --rm debug --image=curlimages/curl --restart=Never -- \
-  curl http://argocd-server.argocd.svc.cluster.local:80
+# 5. Check Nginx logs
+kubectl logs -n argocd -l app=ingress-proxy --tail=10
 ```
 
-**Envoy pod not running or crashing**
+**Nginx pods not running or crashing**
 ```bash
 # Check pod status
-kubectl describe pod -n argocd -l app=envoy-ingress
+kubectl describe pod -n argocd -l app=ingress-proxy
 
 # View pod logs
-kubectl logs -n argocd -l app=envoy-ingress
+kubectl logs -n argocd -l app=ingress-proxy --tail=20
 
 # Verify ConfigMap
-kubectl get configmap envoy-config -n argocd -o yaml
+kubectl get configmap ingress-proxy-config -n argocd -o yaml
+
+# Check if port 80 is already in use on the host
+netstat -tulpn | grep :80
+# or on macOS:
+lsof -i :80
 ```
 
 **ArgoCD UI not loading**
