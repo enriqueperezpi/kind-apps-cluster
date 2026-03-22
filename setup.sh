@@ -4,6 +4,9 @@ set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
+# ANSI color codes
+DIM="\033[2m"
+
 # Run a labelled step; failures are reported but don't abort the full deploy.
 run_step() {
   local label="$1"; shift

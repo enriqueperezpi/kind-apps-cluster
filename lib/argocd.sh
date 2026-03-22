@@ -31,33 +31,46 @@ _argocd_installed() {
 }
 
 install_argocd() {
-  if _argocd_installed; then
-    log_warn "ArgoCD is already installed in '${ARGOCD_NAMESPACE}'. Upgrading to ensure consistency…"
-  else
-    log_info "Creating namespace '${ARGOCD_NAMESPACE}'…"
-    kubectl create namespace "$ARGOCD_NAMESPACE" --dry-run=client -o yaml | kubectl apply -f -
-  fi
-
-  # Resolve version
+  # Resolve version first
   local resolved_version
   resolved_version=$(get_argocd_version)
   log_info "Using ArgoCD version: ${resolved_version}"
   
-  local manifest="https://raw.githubusercontent.com/argoproj/argo-cd/${resolved_version}/manifests/install.yaml"
-  log_info "Applying ArgoCD manifest…"
-  
-  # Apply with retry (ArgoCD can take time to be fully ready)
-  local max_retries=3
-  local retry=0
-  while [[ $retry -lt $max_retries ]]; do
-    if kubectl apply -n "$ARGOCD_NAMESPACE" -f "$manifest" 2>&1 | tee /dev/stderr | grep -q "error"; then
-      ((retry++)) || true
-      log_warn "Retry ${retry}/${max_retries}…"
-      sleep 5
-    else
-      break
-    fi
-  done
+  # Always install ApplicationSet CRD first (required for applicationset-controller)
+  if kubectl get crd applicationsets.argoproj.io &>/dev/null; then
+    log_info "ApplicationSet CRD already installed."
+  else
+    log_info "Installing ApplicationSet CRD…"
+    kubectl apply -f "https://raw.githubusercontent.com/argoproj/argo-cd/${resolved_version}/manifests/crds/applicationset-crd.yaml"
+  fi
+
+  if _argocd_installed; then
+    log_warn "ArgoCD is already installed in '${ARGOCD_NAMESPACE}'. Upgrading to ensure consistency…"
+    # Re-apply the manifest to ensure all components are up to date
+    local manifest="https://raw.githubusercontent.com/argoproj/argo-cd/${resolved_version}/manifests/install.yaml"
+    log_info "Re-applying ArgoCD manifest…"
+    kubectl apply -n "$ARGOCD_NAMESPACE" -f "$manifest" 2>&1 | grep -v "unchanged" || true
+  else
+    log_info "Creating namespace '${ARGOCD_NAMESPACE}'…"
+    kubectl create namespace "$ARGOCD_NAMESPACE" --dry-run=client -o yaml | kubectl apply -f -
+    
+    # Apply ArgoCD manifest
+    local manifest="https://raw.githubusercontent.com/argoproj/argo-cd/${resolved_version}/manifests/install.yaml"
+    log_info "Applying ArgoCD manifest…"
+    
+    # Apply with retry (ArgoCD can take time to be fully ready)
+    local max_retries=3
+    local retry=0
+    while [[ $retry -lt $max_retries ]]; do
+      if kubectl apply -n "$ARGOCD_NAMESPACE" -f "$manifest" 2>&1 | tee /dev/stderr | grep -q "error"; then
+        ((retry++)) || true
+        log_warn "Retry ${retry}/${max_retries}…"
+        sleep 5
+      else
+        break
+      fi
+    done
+  fi
 
   log_info "Waiting for ArgoCD server to be ready…"
   wait_for_deployment "$ARGOCD_NAMESPACE" "argocd-server" 600
@@ -207,12 +220,17 @@ apply_argocd_apps() {
     fi
     
     log_info "  -> ${app_name}"
-    if kubectl apply -f "$app_file"; then
+    local apply_output
+    apply_output=$(kubectl apply -f "$app_file" 2>&1)
+    local apply_status=$?
+    if [[ $apply_status -eq 0 ]]; then
+      echo "     ${apply_output}" | head -1
       ((app_count++)) || true
     else
-      log_warn "    Failed to apply ${app_name}"
+      log_error "    Failed to apply ${app_name}"
+      echo "    Error: ${apply_output}" | head -5
     fi
-  done < <(find "$apps_dir" -name 'application.yaml' -o -name 'application.yml' -print0)
+  done < <(find "$apps_dir" \( -name 'application.yaml' -o -name 'application.yml' \) -print0)
   
   echo ""
   if [[ $app_count -gt 0 ]]; then
