@@ -1,53 +1,46 @@
 #!/usr/bin/env bash
-# gateway-api.sh — Cilium as Gateway API controller for local k8s
-# Uses Cilium CNI with Gateway API support for kind
+# gateway-api.sh — Gateway API controller setup for kind
+# Supports Cilium (full Gateway API) or kind networking (basic routing)
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 source "${SCRIPT_DIR}/lib/utils.sh"
 
+# Configuration from config.conf
 CILIUM_VERSION="${CILIUM_VERSION:-1.17.2}"
 CILIUM_NAMESPACE="cilium"
-GATEWAY_API_NAMESPACE="gateway-api"
 
-_install_kind_config() {
-  log_info "Cilium requires special kind cluster configuration…"
+# ── kubectl context verification ──────────────────────────────────────────────
+_verify_kubectl_for_gateway() {
+  # Ensure we're using the kind cluster context
+  local current_context
+  current_context=$(kubectl config current-context 2>/dev/null || echo "")
   
-  # Check if cluster exists with Cilium config
-  if kind get clusters 2>/dev/null | grep -q "^${CLUSTER_NAME}$"; then
-    log_warn "Cluster '${CLUSTER_NAME}' exists. To use Cilium, you must delete and recreate it."
-    log_info "Run: kind delete cluster --name ${CLUSTER_NAME}"
-    log_info "Then re-run this setup."
+  if [[ "$current_context" != "kind-${CLUSTER_NAME}" ]]; then
+    log_error "kubectl is using context '${current_context}', but we need kind-${CLUSTER_NAME}."
+    log_info "Switching context…"
+    kubectl config use-context "kind-${CLUSTER_NAME}" 2>/dev/null || {
+      log_error "Failed to switch kubectl context. Is the cluster running?"
+      return 1
+    }
+  fi
+  
+  # Verify cluster is reachable
+  if ! kubectl cluster-info &>/dev/null; then
+    log_error "Cannot connect to cluster '${CLUSTER_NAME}'."
+    log_info "Make sure the cluster is running: kind get clusters"
     return 1
   fi
   
   return 0
 }
 
-install_gateway_api() {
-  # Install Gateway API CRDs first
-  install_gateway_api_crds
-  
-  # Install Cilium with Gateway API support
-  install_cilium
-  
-  # Create Gateway API infrastructure namespace
-  kubectl create namespace "${GATEWAY_API_NAMESPACE}" --dry-run=client -o yaml | kubectl apply -f -
-  
-  # Create GatewayClass
-  create_gateway_class
-  
-  # Create Gateway
-  create_gateway
-  
-  # Create ArgoCD HTTPRoute
-  create_argocd_httproute
-  
-  # Create HTTPRoutes for apps
-  create_app_httproutes
-}
-
+# ── Install Gateway API CRDs ───────────────────────────────────────────────
 install_gateway_api_crds() {
+  if ! _verify_kubectl_for_gateway; then
+    return 1
+  fi
+  
   if kubectl get crd gateways.gateway.networking.k8s.io &>/dev/null; then
     log_info "Gateway API CRDs already installed."
     return 0
@@ -58,7 +51,14 @@ install_gateway_api_crds() {
   log_success "Gateway API CRDs installed."
 }
 
-install_cilium() {
+# ── Install Cilium (if configured) ────────────────────────────────────────
+install_cilium_if_needed() {
+  if [[ "${CNI_PLUGIN:-kind}" != "cilium" ]]; then
+    log_info "Using kind networking (CNI_PLUGIN=${CNI_PLUGIN}). Skipping Cilium."
+    log_info "For Gateway API support, set CNI_PLUGIN=\"cilium\" in config.conf."
+    return 0
+  fi
+  
   if kubectl get pods -n "${CILIUM_NAMESPACE}" -l k8s-app=cilium 2>/dev/null | grep -q Running; then
     log_success "Cilium is already running."
     return 0
@@ -93,7 +93,12 @@ install_cilium() {
   log_success "Cilium installed successfully."
 }
 
+# ── Create Gateway resources ─────────────────────────────────────────────────
 create_gateway_class() {
+  if [[ "${CNI_PLUGIN:-kind}" != "cilium" ]]; then
+    return 0
+  fi
+  
   log_info "Creating Cilium GatewayClass…"
 
   kubectl apply -f - <<EOF
@@ -109,6 +114,11 @@ EOF
 }
 
 create_gateway() {
+  if [[ "${CNI_PLUGIN:-kind}" != "cilium" ]]; then
+    log_info "Gateway resources require Cilium CNI (CNI_PLUGIN=\"cilium\")."
+    return 0
+  fi
+  
   log_info "Creating Gateway for HTTP traffic…"
 
   kubectl apply -f - <<EOF
@@ -134,6 +144,12 @@ EOF
 }
 
 create_argocd_httproute() {
+  if [[ "${CNI_PLUGIN:-kind}" != "cilium" ]]; then
+    log_info "HTTPRoutes require Cilium CNI. ArgoCD accessible via port-forward."
+    log_info "Run: kubectl port-forward -n argocd svc/argocd-server 8080:80"
+    return 0
+  fi
+  
   log_info "Creating HTTPRoute for ArgoCD (argocd.local)…"
 
   kubectl apply -f - <<EOF
@@ -164,8 +180,11 @@ EOF
 create_app_httproutes() {
   local apps_dir="${ARGOCD_APPS_DIR:-./argocd-apps}"
   
+  if [[ "${CNI_PLUGIN:-kind}" != "cilium" ]]; then
+    return 0
+  fi
+  
   if [[ ! -d "$apps_dir" ]]; then
-    log_warn "Apps directory '${apps_dir}' not found."
     return 0
   fi
 
@@ -174,7 +193,6 @@ create_app_httproutes() {
   count=$(find "$apps_dir" -name 'httproute.yaml' -o -name 'httproute.yml' 2>/dev/null | wc -l | tr -d ' ')
   
   if [[ "$count" -eq 0 ]]; then
-    log_info "No HTTPRoute files found in '${apps_dir}'."
     return 0
   fi
 
@@ -190,30 +208,65 @@ create_app_httproutes() {
   log_success "Created ${count} HTTPRoute(s)."
 }
 
+# ── Main install function ────────────────────────────────────────────────────
+install_gateway_api() {
+  log_info "Installing Gateway API infrastructure…"
+  
+  # Verify kubectl context first
+  if ! _verify_kubectl_for_gateway; then
+    log_error "Cannot proceed without valid kubectl context."
+    return 1
+  fi
+  
+  # Install Gateway API CRDs
+  install_gateway_api_crds
+  
+  # Install Cilium if configured
+  install_cilium_if_needed
+  
+  # Create Gateway resources
+  create_gateway_class
+  create_gateway
+  create_argocd_httproute
+  create_app_httproutes
+  
+  log_success "Gateway API setup complete."
+}
+
+# ── Status check ────────────────────────────────────────────────────────────
 gateway_api_status() {
   echo ""
   
+  # Check kubectl context
+  local current_context
+  current_context=$(kubectl config current-context 2>/dev/null || echo "unknown")
+  echo "  kubectl context: ${current_context}"
+  
   # Cilium status
-  if kubectl get pods -n "${CILIUM_NAMESPACE}" -l k8s-app=cilium 2>/dev/null | grep -q Running; then
-    log_success "Cilium is running."
-    kubectl get pods -n "${CILIUM_NAMESPACE}" -l k8s-app=cilium --no-headers | head -3
-  else
-    log_warn "Cilium is NOT running."
-  fi
+  if [[ "${CNI_PLUGIN:-kind}" == "cilium" ]]; then
+    if kubectl get pods -n "${CILIUM_NAMESPACE}" -l k8s-app=cilium 2>/dev/null | grep -q Running; then
+      log_success "Cilium is running."
+      kubectl get pods -n "${CILIUM_NAMESPACE}" -l k8s-app=cilium --no-headers | head -2
+    else
+      log_warn "Cilium is NOT running."
+    fi
 
-  # GatewayClass
-  if kubectl get gatewayclass cilium &>/dev/null; then
-    log_success "GatewayClass 'cilium' exists."
-  else
-    log_warn "GatewayClass 'cilium' not found."
-  fi
+    # GatewayClass
+    if kubectl get gatewayclass cilium &>/dev/null; then
+      log_success "GatewayClass 'cilium' exists."
+    else
+      log_warn "GatewayClass 'cilium' not found."
+    fi
 
-  # Gateway
-  if kubectl get gateway cilium-gateway -n "${ARGOCD_NAMESPACE}" &>/dev/null; then
-    log_success "Gateway 'cilium-gateway' exists."
-    kubectl get gateway cilium-gateway -n "${ARGOCD_NAMESPACE}"
+    # Gateway
+    if kubectl get gateway cilium-gateway -n "${ARGOCD_NAMESPACE}" &>/dev/null; then
+      log_success "Gateway 'cilium-gateway' exists."
+    else
+      log_warn "Gateway 'cilium-gateway' not found."
+    fi
   else
-    log_warn "Gateway 'cilium-gateway' not found."
+    log_info "Using kind networking (CNI_PLUGIN=${CNI_PLUGIN:-kind})."
+    log_info "Set CNI_PLUGIN=\"cilium\" in config.conf for Gateway API support."
   fi
 
   # HTTPRoutes

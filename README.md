@@ -1,14 +1,52 @@
 # kind-apps-cluster
 
-Local Kubernetes cluster with ArgoCD and Cilium Gateway API — all managed by an idempotent bash script.
+Local Kubernetes cluster with ArgoCD and Gateway API — all managed by an idempotent bash script.
 
 ## Architecture
 
-**Key design:** Uses **Cilium CNI** as the networking layer with **Gateway API** for HTTP routing. Each application gets a **HTTPRoute** for public access. This is the modern, standard approach for Kubernetes ingress.
+**Key design:** Uses kind's built-in networking by default. Optionally enables **Cilium CNI** with **Gateway API** for advanced HTTP routing. Works on macOS, Windows, and Linux.
 
-### How traffic reaches ArgoCD
+### Default Mode (kind networking)
 
 ```
+Browser ──► localhost:80 (kind node port)
+                  │
+                  ▼
+         kind cluster (default CNI)
+                  │
+                  ▼
+         ArgoCD Service (ClusterIP:80)
+                  │
+                  ▼
+         ArgoCD Pod (insecure mode)
+```
+
+**Access:** `kubectl port-forward -n argocd svc/argocd-server 8080:80`
+
+### Optional: Cilium + Gateway API (Linux only)
+
+```
+Browser ──► argocd.local
+                  │
+                  ▼
+         kind cluster with Cilium CNI
+      ┌─────────────────────────────────────┐
+      │  Cilium Gateway API Controller        │
+      │  - Manages Gateway resources        │
+      └─────────────────────────────────────┘
+                  │
+                  ▼
+         Gateway + HTTPRoute
+      ┌─────────────────────────────────────┐
+      │  Gateway: cilium-gateway            │
+      │  HTTPRoute: argocd.local → :80    │
+      └─────────────────────────────────────┘
+                  │
+                  ▼
+       ArgoCD Service (ClusterIP:80)
+```
+
+**Access:** Add `127.0.0.1 argocd.local` to `/etc/hosts`, then visit `http://argocd.local`
 Browser ──► argocd.local (host machine)
                   │
                   ▼
@@ -138,8 +176,8 @@ echo "127.0.0.1 argocd.local" | sudo tee -a /etc/hosts
 | `CLUSTER_NAME` | `kind-apps-cluster` | kind cluster name |
 | `K8S_VERSION` | `v1.33.2` | Kubernetes version (kind node image tag) |
 | `WORKER_NODES` | `1` | Number of worker nodes |
-| `CNI_PLUGIN` | `cilium` | CNI plugin (cilium, kind) — Cilium enables Gateway API |
-| `CILIUM_VERSION` | `1.17.2` | Cilium version (if using Cilium) |
+| `CNI_PLUGIN` | `kind` | CNI plugin: `kind` (works everywhere) or `cilium` (Gateway API, Linux only) |
+| `CILIUM_VERSION` | `1.17.2` | Cilium version (only if CNI_PLUGIN=cilium) |
 | `GATEWAY_CLASS_NAME` | `cilium` | Gateway API controller class |
 | `ARGOCD_NAMESPACE` | `argocd` | Namespace for ArgoCD and Gateway |
 | `ARGOCD_VERSION` | `stable` | ArgoCD manifest version |

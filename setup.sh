@@ -51,6 +51,30 @@ fi
 source "${SCRIPT_DIR}/lib/utils.sh"
 source "${SCRIPT_DIR}/lib/tools.sh"
 source "${SCRIPT_DIR}/lib/kind.sh"
+
+# ── Check kubectl context ───────────────────────────────────
+_verify_kubectl_context() {
+  local current_context
+  current_context=$(kubectl config current-context 2>/dev/null || echo "")
+  
+  # If no cluster exists, that's ok - it will be created
+  if ! kind get clusters 2>/dev/null | grep -q "^${CLUSTER_NAME}$"; then
+    return 0
+  fi
+  
+  # Cluster exists, ensure we're using the right context
+  if [[ "$current_context" != "kind-${CLUSTER_NAME}" ]]; then
+    echo -e "\033[1;33m[WARN]\033[0m  kubectl is using context '${current_context}', but cluster '${CLUSTER_NAME}' exists."
+    echo -e "       Switching to kind-${CLUSTER_NAME}…"
+    kubectl config use-context "kind-${CLUSTER_NAME}" 2>/dev/null || {
+      echo -e "\033[1;31m[ERROR]\033[0m  Failed to switch kubectl context."
+      return 1
+    }
+  fi
+}
+
+# Verify context early
+_verify_kubectl_context || true
 source "${SCRIPT_DIR}/lib/argocd.sh"
 source "${SCRIPT_DIR}/lib/gateway-api.sh"
 
