@@ -107,30 +107,15 @@ argocd_status() {
 }
 
 argocd_gateway_info() {
-  header "ArgoCD Access (via Gateway API)"
+  header "ArgoCD Access"
 
-  # Get the Gateway's LoadBalancer IP
-  local gw_ip
-  gw_ip=$(kubectl get gateway argocd-gateway -n "$ARGOCD_NAMESPACE" \
-    -o jsonpath='{.status.addresses[0].value}' 2>/dev/null || true)
-
-  if [[ -n "$gw_ip" ]]; then
-    echo -e "  Gateway IP: ${BOLD}${gw_ip}${NC}"
-    echo -e "  URL:        ${BOLD}http://${gw_ip}${NC}"
-  else
-    echo -e "  URL:        ${BOLD}http://argocd.localtest.me${NC}"
-    echo -e "  (Gateway has no IP yet — try again in a moment)"
-  fi
-
-  echo -e "  User:       ${BOLD}admin${NC}"
+  echo -e "  Open ArgoCD via port-forward (menu option 9):"
+  echo -e "    ${BOLD}http://localhost:8080${NC}"
+  echo ""
+  echo -e "  Or manually:"
+  echo -e "    ${CYAN}kubectl port-forward -n ${ARGOCD_NAMESPACE} svc/argocd-server 8080:443${NC}"
+  echo ""
+  echo -e "  User:     ${BOLD}admin${NC}"
   argocd_admin_password
-
-  if [[ -n "$gw_ip" ]]; then
-    echo ""
-    echo -e "  To use a hostname instead of the IP, add to /etc/hosts:"
-    echo -e "    ${CYAN}${gw_ip} argocd.localtest.me${NC}"
-    echo -e "  Then open: ${BOLD}http://argocd.localtest.me${NC}"
-  fi
-
   separator
 }

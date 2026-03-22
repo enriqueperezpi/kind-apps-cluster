@@ -1,11 +1,9 @@
 #!/usr/bin/env bash
-# gateway-api.sh — Gateway API CRDs + Cilium as gateway controller + MetalLB for kind
+# gateway-api.sh — Gateway API CRDs + Cilium as gateway controller
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 source "${SCRIPT_DIR}/lib/utils.sh"
-
-METALLAB_NAMESPACE="metallb-system"
 
 _gateway_api_crds_installed() {
   kubectl get crd gateways.gateway.networking.k8s.io &>/dev/null
@@ -14,11 +12,6 @@ _gateway_api_crds_installed() {
 _cilium_installed() {
   kubectl -n kube-system get deployment cilium &>/dev/null || \
     kubectl -n kube-system get daemonset cilium &>/dev/null
-}
-
-_metallb_installed() {
-  kubectl get namespace "$METALLAB_NAMESPACE" &>/dev/null && \
-    kubectl get deployment controller -n "$METALLAB_NAMESPACE" &>/dev/null
 }
 
 install_gateway_api_crds() {
@@ -56,216 +49,6 @@ install_cilium() {
   log_success "Cilium installed with Gateway API support."
 }
 
-# Discover the Docker network subnet for MetalLB
-_get_metallb_ip_range() {
-  local node_ip
-  node_ip=$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "${CLUSTER_NAME}-control-plane" 2>/dev/null)
-
-  if [[ -z "$node_ip" ]]; then
-    log_error "Could not determine control-plane container IP."
-    return 1
-  fi
-
-  local base
-  base=$(echo "$node_ip" | awk -F. '{print $1"."$2"."$3}')
-  echo "${base}.200-${base}.215"
-}
-
-install_metallb() {
-  if _metallb_installed; then
-    log_warn "MetalLB is already installed — skipping."
-  else
-    log_info "Installing MetalLB…"
-    kubectl apply -f "https://raw.githubusercontent.com/metallb/metallb/v0.14.8/config/manifests/metallb-native.yaml"
-
-    log_info "Waiting for MetalLB pods…"
-    wait_for_pods_ready "$METALLAB_NAMESPACE" "" 300
-  fi
-
-  local ip_range
-  ip_range=$(_get_metallb_ip_range)
-
-  log_info "Configuring MetalLB IP pool: ${ip_range}"
-  kubectl apply -f - <<EOF
-apiVersion: metallb.io/v1beta1
-kind: IPAddressPool
-metadata:
-  name: kind-pool
-  namespace: ${METALLAB_NAMESPACE}
-spec:
-  addresses:
-  - ${ip_range}
----
-apiVersion: metallb.io/v1beta1
-kind: L2Advertisement
-metadata:
-  name: kind-l2
-  namespace: ${METALLAB_NAMESPACE}
-spec:
-  ipAddressPools:
-  - kind-pool
-EOF
-
-  log_success "MetalLB configured."
-}
-
-# Add a host route so the LoadBalancer IP is reachable from the host.
-# kind runs inside Docker — the MetalLB IP lives on the Docker bridge
-# which the host can't reach without an explicit route.
-_add_host_route() {
-  local lb_ip="$1"
-
-  # Try to get the Docker bridge gateway for the kind network
-  local gateway
-  gateway=$(docker network inspect kind -f '{{(index .IPAM.Config 0).Gateway}}' 2>/dev/null || true)
-
-  if [[ -z "$gateway" ]]; then
-    log_warn "Could not discover Docker network gateway."
-    _print_fallback_instructions "$lb_ip"
-    return 1
-  fi
-
-  # Quick check — can we already reach it?
-  if ping -c 1 -W 2 "$lb_ip" &>/dev/null; then
-    log_success "LoadBalancer IP ${lb_ip} is already reachable from host."
-    return 0
-  fi
-
-  local os
-  os=$(uname -s)
-  
-  case "$os" in
-    Darwin)
-      _add_host_route_darwin "$lb_ip" "$gateway"
-      ;;
-    Linux)
-      _add_host_route_linux "$lb_ip" "$gateway"
-      ;;
-    *)
-      log_warn "Unsupported platform '${os}'."
-      _print_fallback_instructions "$lb_ip"
-      return 1
-      ;;
-  esac
-}
-
-# macOS-specific route handling
-_add_host_route_darwin() {
-  local lb_ip="$1"
-  local gateway="$2"
-  local existing_gw
-  
-  log_info "Adding host route: ${lb_ip} via ${gateway}…"
-  
-  # Check if a route exists and what gateway it uses
-  existing_gw=$(sudo route -n get "$lb_ip" 2>/dev/null | grep "gateway:" | awk '{print $2}' || true)
-  
-  if [[ -n "$existing_gw" ]]; then
-    if [[ "$existing_gw" == "$gateway" ]]; then
-      log_warn "Route to ${lb_ip} already exists with correct gateway — skipping."
-      return 0
-    else
-      log_warn "Route to ${lb_ip} exists but points to wrong gateway (${existing_gw}, should be ${gateway}). Attempting to fix…"
-      if sudo route -n delete -host "$lb_ip" 2>/dev/null; then
-        log_info "Deleted incorrect route."
-      else
-        log_warn "Could not delete existing route — trying to add anyway."
-      fi
-    fi
-  fi
-  
-  # Add the correct route
-  if sudo route -n add -host "$lb_ip" "$gateway" 2>/dev/null; then
-    log_success "Route added successfully."
-    # Verify it was added with the correct gateway
-    sleep 1
-    local verified_gw
-    verified_gw=$(sudo route -n get "$lb_ip" 2>/dev/null | grep "gateway:" | awk '{print $2}' || true)
-    if [[ "$verified_gw" == "$gateway" ]]; then
-      log_success "Route verified: ${lb_ip} → ${gateway}"
-      return 0
-    else
-      log_warn "Route was added but verification failed. Gateway is ${verified_gw}, expected ${gateway}."
-      return 1
-    fi
-  else
-    log_warn "Could not add route automatically."
-    _print_fallback_instructions "$lb_ip"
-    return 1
-  fi
-}
-
-# Linux-specific route handling
-_add_host_route_linux() {
-  local lb_ip="$1"
-  local gateway="$2"
-  
-  log_info "Adding host route: ${lb_ip} via ${gateway}…"
-  
-  # Check if a route exists
-  local existing_route
-  existing_route=$(ip route get "$lb_ip" 2>/dev/null || true)
-  
-  if [[ -n "$existing_route" ]]; then
-    # Route exists, check if it's correct
-    if echo "$existing_route" | grep -q "$gateway"; then
-      log_warn "Route to ${lb_ip} already exists with correct gateway — skipping."
-      return 0
-    else
-      log_warn "Route to ${lb_ip} exists but points to wrong gateway. Attempting to delete…"
-      if sudo ip route delete "$lb_ip/32" 2>/dev/null; then
-        log_info "Deleted incorrect route."
-      else
-        log_warn "Could not delete existing route — trying to add anyway."
-      fi
-    fi
-  fi
-  
-  # Add the correct route
-  if sudo ip route add "${lb_ip}/32" via "$gateway" 2>/dev/null; then
-    log_success "Route added successfully."
-    # Verify
-    sleep 1
-    if ip route get "$lb_ip" | grep -q "$gateway"; then
-      log_success "Route verified: ${lb_ip} → ${gateway}"
-      return 0
-    else
-      log_warn "Route was added but verification failed."
-      return 1
-    fi
-  else
-    log_warn "Could not add route automatically."
-    _print_fallback_instructions "$lb_ip"
-    return 1
-  fi
-}
-
-_print_fallback_instructions() {
-  local lb_ip="$1"
-  echo ""
-  echo -e "  ${YELLOW}Alternative access methods:${NC}"
-  echo ""
-  echo "  Option A — Add route manually (requires sudo):"
-  echo "    macOS:"
-  echo "      # First, delete any incorrect route:"
-  echo "      sudo route -n delete -host ${lb_ip}"
-  echo "      # Then add the correct route:"
-  echo "      sudo route -n add -host ${lb_ip} \$(docker network inspect kind -f '{{(index .IPAM.Config 0).Gateway}}')"
-  echo ""
-  echo "    Linux:"
-  echo "      sudo ip route delete ${lb_ip}/32 || true"
-  echo "      sudo ip route add ${lb_ip}/32 via \$(docker network inspect kind -f '{{(index .IPAM.Config 0).Gateway}}')"
-  echo ""
-  echo "  Option B — kubectl port-forward (always works, no sudo needed):"
-  echo "    kubectl port-forward -n ${ARGOCD_NAMESPACE} svc/cilium-gateway-argocd-gateway 8080:80"
-  echo "    Then open http://localhost:8080"
-  echo ""
-  echo "  After fixing the route, test with:"
-  echo "    ping ${lb_ip}"
-  echo "    curl http://${lb_ip}"
-  echo ""
-}
-
 create_argocd_gateway() {
   log_info "Creating Gateway and HTTPRoute for ArgoCD…"
 
@@ -298,7 +81,7 @@ spec:
   - name: argocd-gateway
     namespace: ${ARGOCD_NAMESPACE}
   hostnames:
-  - "argocd.localtest.me"
+  - "argocd.local"
   rules:
   - matches:
     - path:
@@ -309,37 +92,12 @@ spec:
       port: 443
 EOF
 
-  # Wait for the Gateway to get an address from MetalLB
-  log_info "Waiting for Gateway address to be assigned…"
-  local addr=""
-  local end=$((SECONDS + 120))
-  while (( SECONDS < end )); do
-    addr=$(kubectl get gateway argocd-gateway -n "$ARGOCD_NAMESPACE" \
-      -o jsonpath='{.status.addresses[0].value}' 2>/dev/null || true)
-    if [[ -n "$addr" ]]; then
-      break
-    fi
-    sleep 3
-  done
-
-  if [[ -z "$addr" ]]; then
-    log_warn "Gateway address not assigned yet — it may take a moment."
-    log_success "ArgoCD Gateway and HTTPRoute created."
-    return 0
-  fi
-
-  log_success "Gateway address: ${addr}"
-
-  # Make the IP reachable from the host
-  _add_host_route "$addr" || true
-
   log_success "ArgoCD Gateway and HTTPRoute created."
 }
 
 install_gateway_api() {
   install_gateway_api_crds
   install_cilium
-  install_metallb
   create_argocd_gateway
 }
 
@@ -357,27 +115,8 @@ gateway_api_status() {
     log_warn "Cilium is NOT installed."
   fi
 
-  if _metallb_installed; then
-    log_success "MetalLB is installed."
-  else
-    log_warn "MetalLB is NOT installed."
-  fi
-
   if kubectl get gateway argocd-gateway -n "${ARGOCD_NAMESPACE}" &>/dev/null; then
-    local addr
-    addr=$(kubectl get gateway argocd-gateway -n "${ARGOCD_NAMESPACE}" \
-      -o jsonpath='{.status.addresses[0].value}' 2>/dev/null || true)
-    if [[ -n "$addr" ]]; then
-      log_success "ArgoCD Gateway exists (address: ${addr})."
-      # Verify reachability
-      if ping -c 1 -W 2 "$addr" &>/dev/null; then
-        log_success "Gateway address ${addr} is reachable from host."
-      else
-        log_warn "Gateway address ${addr} is NOT reachable from host — run _add_host_route or use port-forward."
-      fi
-    else
-      log_warn "ArgoCD Gateway exists but has NO address assigned."
-    fi
+    log_success "ArgoCD Gateway exists."
   else
     log_warn "ArgoCD Gateway does NOT exist."
   fi
