@@ -1,6 +1,6 @@
 # kind-apps-cluster
 
-Local Kubernetes cluster with ArgoCD, Gateway API (Cilium), and cert-manager — all managed by an idempotent bash script.
+Local Kubernetes cluster with ArgoCD and Gateway API — all managed by an idempotent bash script.
 
 ## Architecture
 
@@ -12,19 +12,30 @@ Local Kubernetes cluster with ArgoCD, Gateway API (Cilium), and cert-manager —
 ### How traffic reaches ArgoCD
 
 ```
-Browser ──► localhost:8080
-                │
-                ▼
-        kubectl port-forward
-                │
-                ▼
-        argocd-server Service (:443)
-                │
-                ▼
-        ArgoCD Pod (HTTP, insecure mode)
+Browser ──► localhost:80 (host machine)
+                 │
+                 ▼
+         kind cluster port mapping (80)
+                 │
+                 ▼
+         cloud-provider-kind Gateway Controller
+                 │
+                 ▼
+         Gateway: main-gateway
+                 │
+                 ▼
+         HTTPRoute: argocd.local
+                 │
+                 ▼
+         argocd-server Service (:443)
+                 │
+                 ▼
+         ArgoCD Pod (HTTP, insecure mode)
 ```
 
-The Gateway API (Cilium) handles **in-cluster routing** for deployed applications. External access to ArgoCD uses `kubectl port-forward` — no host routes, no sudo, works on every OS.
+**Access:** Add `127.0.0.1 argocd.local` to `/etc/hosts` and visit `http://argocd.local`
+
+Gateway API handles **in-cluster routing** for all deployed applications. External access via cloud-provider-kind provides LoadBalancer support for kind clusters.
 
 ## Prerequisites
 
@@ -51,23 +62,25 @@ vim config.conf
 ./setup.sh -y       # non-interactive full deploy
 ```
 
-After the deploy completes, select **option 9** to start port-forward and open `http://localhost:8080`.
+After the deploy completes:
+1. Add to `/etc/hosts`: `127.0.0.1 argocd.local`
+2. Visit `http://argocd.local`
+3. Login with credentials shown in deploy output
 
 ## Usage
 
 ### Interactive Menu
 
 ```
-  1)  Full deploy (cluster + gateway + cert-mgr + argocd + apps)
+  1)  Full deploy (cluster + gateway + argocd + apps)
   2)  Create / verify kind cluster only
-  3)  Install Gateway API + Cilium
-  4)  Install cert-manager
-  5)  Install ArgoCD
-  6)  Apply ArgoCD applications from ./argocd-apps
-  7)  Show status of all components
-  8)  Get ArgoCD admin password
-  9)  Port-forward ArgoCD (http://localhost:8080)
-  10) Delete cluster
+  3)  Install Gateway API + cloud-provider-kind
+  4)  Install ArgoCD
+  5)  Apply ArgoCD applications from ./argocd-apps
+  6)  Show status of all components
+  7)  Get ArgoCD admin password
+  8)  Port-forward ArgoCD (http://localhost:8080)
+  9)  Delete cluster
   0)  Exit
 ```
 
@@ -81,15 +94,29 @@ Every option is **idempotent** — you can run any of them multiple times safely
 
 ## Accessing ArgoCD
 
+After deploy completes, cloud-provider-kind bridges the kind cluster network to your host machine using Docker's host network mode. ArgoCD is accessible directly via hostname without port-forward.
+
+**Quick Setup:**
 ```bash
-./setup.sh   # option 9 — Port-forward ArgoCD
+# 1. Add to /etc/hosts
+echo "127.0.0.1 argocd.local" | sudo tee -a /etc/hosts
+
+# 2. Visit http://argocd.local
+# 3. Login with admin credentials (shown in deploy output)
 ```
 
-Opens a tunnel: `localhost:8080 → argocd-server:443`. Press Ctrl+C to stop.
+**Get ArgoCD admin password:**
+```bash
+./setup.sh   # option 7 — Get ArgoCD admin password
+```
 
+**Alternative: kubectl Port-Forward (if direct access doesn't work)**
+```bash
+./setup.sh   # option 8 — Port-forward ArgoCD
+```
 - **URL:** `http://localhost:8080`
 - **User:** `admin`
-- **Password:** shown after deploy (or `./setup.sh` → option 8)
+- **Password:** (shown after deploy)
 
 ## Configuration (`config.conf`)
 
@@ -102,9 +129,7 @@ Opens a tunnel: `localhost:8080 → argocd-server:443`. Press Ctrl+C to stop.
 | `ARGOCD_VERSION` | `stable` | ArgoCD manifest version |
 | `ARGOCD_APPS_DIR` | `./argocd-apps` | Directory with Application/ApplicationSet YAMLs |
 | `GATEWAY_API_VERSION` | `v1.2.0` | Gateway API CRD version |
-| `GATEWAY_CLASS_NAME` | `cilium` | GatewayClass to use |
-| `CERT_MANAGER_VERSION` | `v1.16.2` | cert-manager Helm chart version |
-| `CERT_MANAGER_NAMESPACE` | `cert-manager` | Namespace for cert-manager |
+| `GATEWAY_CLASS_NAME` | `cloud-provider-kind` | GatewayClass to use |
 | `AUTO_INSTALL_TOOLS` | `true` | Auto-install missing CLI tools |
 | `HTTP_PORT` | `80` | Host port mapped to kind node |
 | `HTTPS_PORT` | `443` | Host port mapped to kind node |
@@ -114,9 +139,8 @@ Opens a tunnel: `localhost:8080 → argocd-server:443`. Press Ctrl+C to stop.
 | Component | Purpose |
 |-----------|---------|
 | **kind** | Local K8s cluster running in Docker |
-| **Cilium** | CNI + Gateway API controller (replaces kube-proxy and nginx-ingress) |
-| **Gateway API** | Standard ingress (`Gateway`, `HTTPRoute` CRDs) — Cilium is the controller |
-| **cert-manager** | Certificate management with selfsigned `ClusterIssuer` for local dev |
+| **cloud-provider-kind** | Gateway Controller + LoadBalancer provider for kind (uses host network to bridge networking) |
+| **Gateway API** | Standard ingress (`Gateway`, `HTTPRoute` CRDs) — cloud-provider-kind is the controller |
 | **ArgoCD** | GitOps continuous delivery — deploys apps from `argocd-apps/` |
 
 ## Deploying Applications
@@ -156,8 +180,7 @@ kind-apps-cluster/
 │   ├── tools.sh            # Tool detection & installation
 │   ├── kind.sh             # kind cluster lifecycle (health checks)
 │   ├── argocd.sh           # ArgoCD install, insecure config, port-forward
-│   ├── gateway-api.sh      # Gateway API CRDs + Cilium
-│   └── cert-manager.sh     # cert-manager + ClusterIssuer
+│   └── gateway-api.sh      # Gateway API CRDs + cloud-provider-kind
 ├── argocd-apps/
 │   ├── README.md
 │   └── example-guestbook.yaml
@@ -170,7 +193,8 @@ kind-apps-cluster/
 The script is safe to re-run at any time:
 
 - **Cluster**: detects unhealthy containers and recreates automatically.
-- **Helm charts** (Cilium, cert-manager): `helm upgrade --install` reconciles to desired state.
+- **Helm charts** (ArgoCD): `helm upgrade --install` reconciles to desired state.
+- **Gateway API**: CRDs are reapplied, cloud-provider-kind container is restarted if needed.
 - **ArgoCD**: config set via `argocd-cmd-params-cm` ConfigMap + rollout restart.
 - **ArgoCD apps**: `kubectl apply` is naturally idempotent.
 
@@ -185,6 +209,37 @@ ERROR: failed to create cluster: could not find a container runtime
 **Ports 80/443 in use**
 → Edit `HTTP_PORT` / `HTTPS_PORT` in `config.conf`.
 
+**Cannot reach `argocd.local` after deploy**
+```bash
+# 1. Verify /etc/hosts entry
+grep "argocd.local" /etc/hosts
+# Should show: 127.0.0.1 argocd.local
+
+# 2. Verify Gateway and HTTPRoute are created
+kubectl get gateway -n argocd
+kubectl get httproute -n argocd
+
+# 3. Check cloud-provider-kind is running
+docker ps | grep cloud-provider-kind
+
+# 4. Check Gateway status
+kubectl describe gateway main-gateway -n argocd
+```
+
+**cloud-provider-kind container not running**
+```bash
+# Check if it exists and why it stopped
+docker ps -a | grep cloud-provider-kind
+
+# Logs from the container
+docker logs cloud-provider-kind
+
+# Restart it manually
+docker run -d --name cloud-provider-kind --rm --network host \
+  -v /var/run/docker.sock:/var/run/docker.sock \
+  registry.k8s.io/cloud-provider-kind/cloud-controller-manager:v0.28.0
+```
+
 **ArgoCD UI not loading**
 ```bash
 kubectl get pods -n argocd                                     # check pods
@@ -192,16 +247,16 @@ kubectl get configmap argocd-cmd-params-cm -n argocd -o yaml  # verify insecure=
 kubectl port-forward -n argocd svc/argocd-server 8080:443     # manual port-forward
 ```
 
-**Gateway API not routing**
+**Gateway API not routing traffic**
 ```bash
 kubectl get gateway -A        # check Gateway status
 kubectl get httproute -A      # check HTTPRoute status
-kubectl get pods -n kube-system -l k8s-app=cilium  # check Cilium pods
+kubectl logs -n kube-system -l app=cloud-provider-kind # check controller logs
 ```
 
 **Reset everything**
 ```bash
-./setup.sh   # option 10 — Delete cluster
+./setup.sh   # option 9 — Delete cluster
 ./setup.sh   # option 1  — Full deploy
 ```
 

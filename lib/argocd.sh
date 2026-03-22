@@ -107,15 +107,21 @@ argocd_status() {
 }
 
 argocd_gateway_info() {
-  header "ArgoCD Access"
+  header "ArgoCD Access via Gateway API"
 
-  echo -e "  Open ArgoCD via port-forward (menu option 9):"
-  echo -e "    ${BOLD}http://localhost:8080${NC}"
+  echo -e "  ${BOLD}Direct Access (Recommended):${NC}"
+  echo -e "    1. Add to /etc/hosts:"
+  echo -e "       ${CYAN}echo '127.0.0.1 argocd.local' | sudo tee -a /etc/hosts${NC}"
+  echo -e "    2. Visit: ${BOLD}http://argocd.local${NC}"
   echo ""
-  echo -e "  Or manually:"
+
+  echo -e "  ${BOLD}Or use port-forward (if direct access doesn't work):${NC}"
   echo -e "    ${CYAN}kubectl port-forward -n ${ARGOCD_NAMESPACE} svc/argocd-server 8080:443${NC}"
+  echo -e "    URL: ${BOLD}http://localhost:8080${NC}"
   echo ""
-  echo -e "  User:     ${BOLD}admin${NC}"
+
+  echo -e "  ${BOLD}Login Credentials:${NC}"
+  echo -e "    User: ${BOLD}admin${NC}"
   argocd_admin_password
   separator
 }

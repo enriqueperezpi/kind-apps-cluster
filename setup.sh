@@ -32,7 +32,6 @@ source "${SCRIPT_DIR}/lib/tools.sh"
 source "${SCRIPT_DIR}/lib/kind.sh"
 source "${SCRIPT_DIR}/lib/argocd.sh"
 source "${SCRIPT_DIR}/lib/gateway-api.sh"
-source "${SCRIPT_DIR}/lib/cert-manager.sh"
 
 # ── Helpers ──────────────────────────────────────────────────
 need_cluster() {
@@ -51,8 +50,7 @@ action_full_deploy() {
   run_step "Create kind cluster"         create_cluster
   run_step "Set kubeconfig"              ensure_kubeconfig
 
-  run_step "Install Gateway API + Cilium" install_gateway_api
-  run_step "Install cert-manager"         install_cert_manager_full
+  run_step "Install Gateway API (cloud-provider-kind)" install_gateway_api
   run_step "Install ArgoCD"               install_argocd
   run_step "Patch ArgoCD server"          patch_argocd_server
   run_step "Create ArgoCD Gateway"        create_argocd_gateway
@@ -64,8 +62,6 @@ action_full_deploy() {
   argocd_status
   echo ""
   gateway_api_status
-  echo ""
-  cert_manager_status
   echo ""
   argocd_gateway_info
 }
@@ -80,16 +76,9 @@ action_cluster_only() {
 
 action_install_gateway_api() {
   need_cluster || return
-  header "Install Gateway API + Cilium"
+  header "Install Gateway API (cloud-provider-kind)"
   install_gateway_api
   gateway_api_status
-}
-
-action_install_cert_manager() {
-  need_cluster || return
-  header "Install cert-manager"
-  install_cert_manager_full
-  cert_manager_status
 }
 
 action_install_argocd() {
@@ -115,8 +104,6 @@ action_status() {
   argocd_status
   echo ""
   gateway_api_status
-  echo ""
-  cert_manager_status
 }
 
 action_get_argocd_password() {
@@ -143,16 +130,15 @@ action_port_forward_argocd() {
 show_menu() {
   header "kind-apps-cluster  —  Local K8s + ArgoCD"
   echo ""
-  echo -e "  ${BOLD}1)${NC} Full deploy (cluster + gateway + cert-mgr + argocd + apps)"
+  echo -e "  ${BOLD}1)${NC} Full deploy (cluster + gateway + argocd + apps)"
   echo -e "  ${BOLD}2)${NC} Create / verify kind cluster only"
-  echo -e "  ${BOLD}3)${NC} Install Gateway API + Cilium"
-  echo -e "  ${BOLD}4)${NC} Install cert-manager"
-  echo -e "  ${BOLD}5)${NC} Install ArgoCD"
-  echo -e "  ${BOLD}6)${NC} Apply ArgoCD applications from ${ARGOCD_APPS_DIR}"
-  echo -e "  ${BOLD}7)${NC} Show status of all components"
-  echo -e "  ${BOLD}8)${NC} Get ArgoCD admin password"
-  echo -e "  ${BOLD}9)${NC} Port-forward ArgoCD (http://localhost:8080)"
-  echo -e "  ${BOLD}10)${NC} Delete cluster"
+  echo -e "  ${BOLD}3)${NC} Install Gateway API (cloud-provider-kind)"
+  echo -e "  ${BOLD}4)${NC} Install ArgoCD"
+  echo -e "  ${BOLD}5)${NC} Apply ArgoCD applications from ${ARGOCD_APPS_DIR}"
+  echo -e "  ${BOLD}6)${NC} Show status of all components"
+  echo -e "  ${BOLD}7)${NC} Get ArgoCD admin password"
+  echo -e "  ${BOLD}8)${NC} Port-forward ArgoCD (http://localhost:8080) — fallback method"
+  echo -e "  ${BOLD}9)${NC} Delete cluster"
   echo ""
   echo -e "  ${BOLD}0)${NC} Exit"
   echo ""
@@ -171,13 +157,12 @@ main() {
       1) action_full_deploy ;;
       2) action_cluster_only ;;
       3) action_install_gateway_api ;;
-      4) action_install_cert_manager ;;
-      5) action_install_argocd ;;
-      6) action_apply_apps ;;
-      7) action_status ;;
-      8) action_get_argocd_password ;;
-      9) action_port_forward_argocd ;;
-      10) action_delete_cluster ;;
+      4) action_install_argocd ;;
+      5) action_apply_apps ;;
+      6) action_status ;;
+      7) action_get_argocd_password ;;
+      8) action_port_forward_argocd ;;
+      9) action_delete_cluster ;;
       0) echo "Bye."; exit 0 ;;
       *) log_warn "Invalid option." ;;
     esac

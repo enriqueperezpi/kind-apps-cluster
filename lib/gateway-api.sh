@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# gateway-api.sh — Gateway API CRDs + Cilium as gateway controller
+# gateway-api.sh — Gateway API CRDs + cloud-provider-kind as controller
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -9,9 +9,8 @@ _gateway_api_crds_installed() {
   kubectl get crd gateways.gateway.networking.k8s.io &>/dev/null
 }
 
-_cilium_installed() {
-  kubectl -n kube-system get deployment cilium &>/dev/null || \
-    kubectl -n kube-system get daemonset cilium &>/dev/null
+_cloud_provider_kind_running() {
+  docker ps --filter name=cloud-provider-kind 2>/dev/null | grep -q cloud-provider-kind
 }
 
 install_gateway_api_crds() {
@@ -24,29 +23,42 @@ install_gateway_api_crds() {
   log_success "Gateway API CRDs installed."
 }
 
-install_cilium() {
-  if _cilium_installed; then
-    log_warn "Cilium is already installed — helm upgrade to reconcile."
+install_cloud_provider_kind() {
+  if _cloud_provider_kind_running; then
+    log_warn "cloud-provider-kind is already running."
+    return 0
   fi
 
-  log_info "Installing Cilium via Helm (gateway-api enabled)…"
-  helm repo add cilium https://helm.cilium.io/ 2>/dev/null || true
-  helm repo update cilium
+  log_info "Installing cloud-provider-kind (Gateway API controller + LoadBalancer provider)…"
+  
+  # Get the latest version
+  local version
+  version=$(basename "$(curl -s -L -o /dev/null -w '%{url_effective}' https://github.com/kubernetes-sigs/cloud-provider-kind/releases/latest 2>/dev/null)" || echo "v0.1.0")
+  log_info "Using cloud-provider-kind version: ${version}"
 
-  helm upgrade --install cilium cilium/cilium \
-    --namespace kube-system \
-    --set kubeProxyReplacement=true \
-    --set k8sServiceHost="${CLUSTER_NAME}-control-plane" \
-    --set k8sServicePort=6443 \
-    --set gatewayAPI.enabled=true \
-    --set hubble.enabled=false \
-    --wait --timeout 5m
+  # Stop any existing container
+  docker stop cloud-provider-kind 2>/dev/null || true
+  docker rm cloud-provider-kind 2>/dev/null || true
 
-  log_info "Waiting for Cilium pods…"
-  kubectl -n kube-system rollout status daemonset/cilium --timeout=300s 2>/dev/null || \
-    kubectl -n kube-system rollout status deployment/cilium --timeout=300s 2>/dev/null || true
+  # Run cloud-provider-kind as Docker container
+  docker run -d \
+    --name cloud-provider-kind \
+    --rm \
+    --network host \
+    -v /var/run/docker.sock:/var/run/docker.sock \
+    "registry.k8s.io/cloud-provider-kind/cloud-controller-manager:${version}"
 
-  log_success "Cilium installed with Gateway API support."
+  # Wait for it to start
+  log_info "Waiting for cloud-provider-kind to start…"
+  sleep 3
+
+  if _cloud_provider_kind_running; then
+    log_success "cloud-provider-kind started successfully."
+  else
+    log_error "Failed to start cloud-provider-kind. Check Docker logs:"
+    docker logs cloud-provider-kind || true
+    return 1
+  fi
 }
 
 create_argocd_gateway() {
@@ -55,22 +67,26 @@ create_argocd_gateway() {
   # Ensure namespace exists (ArgoCD may not be installed yet)
   kubectl create namespace "$ARGOCD_NAMESPACE" --dry-run=client -o yaml | kubectl apply -f -
 
+  # Create single Gateway for all services
   kubectl apply -f - <<EOF
 apiVersion: gateway.networking.k8s.io/v1
 kind: Gateway
 metadata:
-  name: argocd-gateway
+  name: main-gateway
   namespace: ${ARGOCD_NAMESPACE}
 spec:
-  gatewayClassName: ${GATEWAY_CLASS_NAME}
+  gatewayClassName: cloud-provider-kind
   listeners:
   - name: http
     port: 80
     protocol: HTTP
     allowedRoutes:
       namespaces:
-        from: Same
----
+        from: All
+EOF
+
+  # Create HTTPRoute for ArgoCD
+  kubectl apply -f - <<EOF
 apiVersion: gateway.networking.k8s.io/v1
 kind: HTTPRoute
 metadata:
@@ -78,7 +94,7 @@ metadata:
   namespace: ${ARGOCD_NAMESPACE}
 spec:
   parentRefs:
-  - name: argocd-gateway
+  - name: main-gateway
     namespace: ${ARGOCD_NAMESPACE}
   hostnames:
   - "argocd.local"
@@ -92,12 +108,13 @@ spec:
       port: 443
 EOF
 
-  log_success "ArgoCD Gateway and HTTPRoute created."
+  log_success "Gateway (main-gateway) and HTTPRoute (argocd-route) created."
+  log_info "Additional services can be added as new HTTPRoutes pointing to the same Gateway."
 }
 
 install_gateway_api() {
   install_gateway_api_crds
-  install_cilium
+  install_cloud_provider_kind
   create_argocd_gateway
 }
 
@@ -109,15 +126,36 @@ gateway_api_status() {
     log_warn "Gateway API CRDs are NOT installed."
   fi
 
-  if _cilium_installed; then
-    log_success "Cilium is installed."
+  if _cloud_provider_kind_running; then
+    log_success "cloud-provider-kind is running."
+    
+    # Show cloud-provider-kind logs (last few lines)
+    local logs
+    logs=$(docker logs cloud-provider-kind 2>/dev/null | tail -3 || echo "")
+    if [[ -n "$logs" ]]; then
+      echo "  Recent logs:"
+      echo "$logs" | sed 's/^/    /'
+    fi
   else
-    log_warn "Cilium is NOT installed."
+    log_warn "cloud-provider-kind is NOT running."
+    log_info "Start it with: docker run -d --name cloud-provider-kind --rm --network host -v /var/run/docker.sock:/var/run/docker.sock registry.k8s.io/cloud-provider-kind/cloud-controller-manager:latest"
   fi
 
-  if kubectl get gateway argocd-gateway -n "${ARGOCD_NAMESPACE}" &>/dev/null; then
-    log_success "ArgoCD Gateway exists."
+  if kubectl get gateway main-gateway -n "${ARGOCD_NAMESPACE}" &>/dev/null; then
+    log_success "Gateway (main-gateway) exists."
+    
+    # Show gateway status
+    local gw_addresses
+    gw_addresses=$(kubectl get gateway main-gateway -n "${ARGOCD_NAMESPACE}" \
+      -o jsonpath='{.status.addresses[0].value}' 2>/dev/null || echo "pending")
+    echo "  Listening address: ${gw_addresses}"
   else
-    log_warn "ArgoCD Gateway does NOT exist."
+    log_warn "Gateway (main-gateway) does NOT exist."
+  fi
+
+  if kubectl get httproute argocd-route -n "${ARGOCD_NAMESPACE}" &>/dev/null; then
+    log_success "HTTPRoute (argocd-route) exists."
+  else
+    log_warn "HTTPRoute (argocd-route) does NOT exist."
   fi
 }
