@@ -316,7 +316,7 @@ argocd_status() {
   
   # ArgoCD version
   local version
-  version=$(kubectl get deployment argocd-server -n "$ARGOCD_NAMESPACE" -o jsonpath='{.spec.template.spec.containers[0].image}' 2>/dev/null | grep -oP 'v[\d.]+' | head -1)
+  version=$(kubectl get deployment argocd-server -n "$ARGOCD_NAMESPACE" -o jsonpath='{.spec.template.spec.containers[0].image}' 2>/dev/null | sed -n 's/.*:v\([0-9][0-9.]*\).*/v\1/p' | head -1)
   echo "  Version: ${version:-unknown}"
   
   # Server URL

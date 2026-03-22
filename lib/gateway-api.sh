@@ -145,6 +145,10 @@ EOF
   log_success "Gateway 'cilium-gateway' created in namespace ${ARGOCD_NAMESPACE}."
 }
 
+create_argocd_gateway() {
+  create_argocd_httproute
+}
+
 create_argocd_httproute() {
   if [[ "${CNI_PLUGIN:-kind}" != "cilium" ]]; then
     log_info "HTTPRoutes require Cilium CNI. ArgoCD accessible via port-forward."
