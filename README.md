@@ -1,12 +1,12 @@
 # kind-apps-cluster
 
-Local Kubernetes cluster with ArgoCD and Gateway API — all managed by an idempotent bash script.
+Local Kubernetes cluster with ArgoCD and Envoy ingress — all managed by an idempotent bash script.
 
 ## Architecture
 
 > Editable diagram: [`docs/architecture.drawio`](docs/architecture.drawio) — open in [draw.io](https://app.diagrams.net/).
 
-**Note:** On macOS and Windows, cloud-provider-kind automatically enables LoadBalancer port mapping (`--enable-lb-port-mapping`) to allow direct host access to services without port-forwarding.
+**Key design:** Uses **Envoy reverse proxy as NodePort service** to route traffic from the host to services in the cluster. Works seamlessly on macOS, Windows, and Linux.
 
 ### How traffic reaches ArgoCD
 
@@ -14,31 +14,23 @@ Local Kubernetes cluster with ArgoCD and Gateway API — all managed by an idemp
 Browser ──► localhost:80 (host machine)
                  │
                  ▼
-     cloud-provider-kind port mapping
-     (auto-enabled on macOS/Windows)
+    kind cluster port mapping (80 → NodePort)
                  │
                  ▼
-      kind cluster port mapping (80)
+        Envoy Reverse Proxy (NodePort)
                  │
                  ▼
-      cloud-provider-kind Gateway Controller
+      argocd-server Service (port 80)
                  │
                  ▼
-         Gateway: main-gateway
-                 │
-                 ▼
-         HTTPRoute: argocd.local
-                 │
-                 ▼
-       argocd-server Service (:443)
-                 │
-                 ▼
-      ArgoCD Pod (HTTP, insecure mode)
+     ArgoCD Pod (HTTP, insecure mode)
 ```
 
 **Access:** Add `127.0.0.1 argocd.local` to `/etc/hosts` and visit `http://argocd.local`
 
-Gateway API handles **in-cluster routing** for all deployed applications. External access via cloud-provider-kind provides LoadBalancer support for kind clusters.
+Envoy handles **routing from external requests to internal services**. The NodePort service exposes Envoy on port 80 (HTTP) and 443 (HTTPS) on all cluster nodes, which kind maps to the host machine.
+
+**To add more services:** Create new backend clusters in the Envoy ConfigMap and route hostnames to them.
 
 ## Prerequisites
 
@@ -110,7 +102,7 @@ Available flags:
 
 ## Accessing ArgoCD
 
-After deploy completes, cloud-provider-kind bridges the kind cluster network to your host machine. On **macOS and Windows**, the `--enable-lb-port-mapping` flag is automatically enabled to map LoadBalancer ports to the host.
+After deploy completes, Envoy reverse proxy is running as a NodePort service and listening on `localhost:80`.
 
 **Quick Setup:**
 ```bash
@@ -126,9 +118,9 @@ echo "127.0.0.1 argocd.local" | sudo tee -a /etc/hosts
 ./setup.sh   # option 7 — Get ArgoCD admin password
 ```
 
-**Alternative: kubectl Port-Forward (if direct access doesn't work)**
+**Alternative: kubectl Port-Forward (for debugging)**
 ```bash
-./setup.sh   # option 8 — Port-forward ArgoCD
+./setup.sh   # option 8 — Port-forward ArgoCD to localhost:8080
 ```
 - **URL:** `http://localhost:8080`
 - **User:** `admin`
@@ -141,22 +133,19 @@ echo "127.0.0.1 argocd.local" | sudo tee -a /etc/hosts
 | `CLUSTER_NAME` | `kind-apps-cluster` | kind cluster name |
 | `K8S_VERSION` | `v1.33.2` | Kubernetes version (kind node image tag) |
 | `WORKER_NODES` | `1` | Number of worker nodes |
-| `ARGOCD_NAMESPACE` | `argocd` | Namespace for ArgoCD |
+| `ARGOCD_NAMESPACE` | `argocd` | Namespace for ArgoCD and Envoy |
 | `ARGOCD_VERSION` | `stable` | ArgoCD manifest version |
 | `ARGOCD_APPS_DIR` | `./argocd-apps` | Directory with Application/ApplicationSet YAMLs |
-| `GATEWAY_API_VERSION` | `v1.2.0` | Gateway API CRD version |
-| `GATEWAY_CLASS_NAME` | `cloud-provider-kind` | GatewayClass to use |
 | `AUTO_INSTALL_TOOLS` | `true` | Auto-install missing CLI tools |
-| `HTTP_PORT` | `80` | Host port mapped to kind node |
-| `HTTPS_PORT` | `443` | Host port mapped to kind node |
+| `HTTP_PORT` | `80` | Host port mapped to Envoy NodePort |
+| `HTTPS_PORT` | `443` | Host port mapped to Envoy NodePort (future) |
 
 ## Components
 
 | Component | Purpose |
 |-----------|---------|
 | **kind** | Local K8s cluster running in Docker |
-| **cloud-provider-kind** | Gateway Controller + LoadBalancer provider for kind (enables port mapping on macOS/Windows for host access) |
-| **Gateway API** | Standard ingress (`Gateway`, `HTTPRoute` CRDs) — cloud-provider-kind is the controller |
+| **Envoy** | Reverse proxy for HTTP/HTTPS routing — deployed as NodePort service on port 80/443 |
 | **ArgoCD** | GitOps continuous delivery — deploys apps from `argocd-apps/` |
 
 ## Deploying Applications
@@ -196,7 +185,7 @@ kind-apps-cluster/
 │   ├── tools.sh            # Tool detection & installation
 │   ├── kind.sh             # kind cluster lifecycle (health checks)
 │   ├── argocd.sh           # ArgoCD install, insecure config, port-forward
-│   └── gateway-api.sh      # Gateway API CRDs + cloud-provider-kind
+│   └── gateway-api.sh      # Envoy reverse proxy + NodePort service
 ├── argocd-apps/
 │   ├── README.md
 │   └── example-guestbook.yaml
@@ -210,7 +199,7 @@ The script is safe to re-run at any time:
 
 - **Cluster**: detects unhealthy containers and recreates automatically.
 - **Helm charts** (ArgoCD): `helm upgrade --install` reconciles to desired state.
-- **Gateway API**: CRDs are reapplied, cloud-provider-kind container is restarted if needed.
+- **Envoy reverse proxy**: deployment is recreated if unhealthy.
 - **ArgoCD**: config set via `argocd-cmd-params-cm` ConfigMap + rollout restart.
 - **ArgoCD apps**: `kubectl apply` is naturally idempotent.
 
@@ -223,7 +212,7 @@ ERROR: failed to create cluster: could not find a container runtime
 → Start Docker Desktop or your container runtime.
 
 **Ports 80/443 in use**
-→ Edit `HTTP_PORT` / `HTTPS_PORT` in `config.conf`.
+→ Edit `HTTP_PORT` / `HTTPS_PORT` in `config.conf` to use different ports (e.g., 8080/8443).
 
 **Cannot reach `argocd.local` after deploy**
 ```bash
@@ -231,43 +220,51 @@ ERROR: failed to create cluster: could not find a container runtime
 grep "argocd.local" /etc/hosts
 # Should show: 127.0.0.1 argocd.local
 
-# 2. Verify Gateway and HTTPRoute are created
-kubectl get gateway -n argocd
-kubectl get httproute -n argocd
+# 2. Verify Envoy is running
+kubectl get pods -n argocd -l app=envoy-ingress
 
-# 3. Check cloud-provider-kind is running
-docker ps | grep cloud-provider-kind
+# 3. Check Envoy service and NodePort
+kubectl get svc envoy-ingress -n argocd
 
-# 4. Check Gateway status
-kubectl describe gateway main-gateway -n argocd
+# 4. Verify ArgoCD service is accessible
+kubectl get svc argocd-server -n argocd
+
+# 5. Test from within cluster
+kubectl run -it --rm debug --image=curlimages/curl --restart=Never -- \
+  curl http://argocd-server.argocd.svc.cluster.local:80
 ```
 
-**cloud-provider-kind container not running**
+**Envoy pod not running or crashing**
 ```bash
-# Check if it exists and why it stopped
-docker ps -a | grep cloud-provider-kind
+# Check pod status
+kubectl describe pod -n argocd -l app=envoy-ingress
 
-# Logs from the container
-docker logs cloud-provider-kind
+# View pod logs
+kubectl logs -n argocd -l app=envoy-ingress
 
-# Restart it manually
-docker run -d --name cloud-provider-kind --rm --network host \
-  -v /var/run/docker.sock:/var/run/docker.sock \
-  registry.k8s.io/cloud-provider-kind/cloud-controller-manager:v0.28.0
+# Verify ConfigMap
+kubectl get configmap envoy-config -n argocd -o yaml
 ```
 
 **ArgoCD UI not loading**
 ```bash
-kubectl get pods -n argocd                                     # check pods
+kubectl get pods -n argocd                                     # check all pods
 kubectl get configmap argocd-cmd-params-cm -n argocd -o yaml  # verify insecure=true
-kubectl port-forward -n argocd svc/argocd-server 8080:443     # manual port-forward
+kubectl port-forward -n argocd svc/argocd-server 8080:80      # manual port-forward
+# Then visit http://localhost:8080
 ```
 
-**Gateway API not routing traffic**
+**DNS not resolving `argocd.local` on macOS**
 ```bash
-kubectl get gateway -A        # check Gateway status
-kubectl get httproute -A      # check HTTPRoute status
-kubectl logs -n kube-system -l app=cloud-provider-kind # check controller logs
+# Verify it's in /etc/hosts
+cat /etc/hosts | grep argocd.local
+
+# Flush DNS cache on macOS
+sudo dscacheutil -flushcache
+sudo killall -HUP mDNSResponder
+
+# Test resolution
+nslookup argocd.local
 ```
 
 **Reset everything**
