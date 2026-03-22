@@ -40,13 +40,23 @@ install_cloud_provider_kind() {
   docker stop cloud-provider-kind 2>/dev/null || true
   docker rm cloud-provider-kind 2>/dev/null || true
 
+  # Detect platform and enable port mapping for macOS/Windows
+  local extra_args=""
+  case "$(uname -s)" in
+    Darwin|MINGW*|MSYS*)
+      log_info "Enabling LoadBalancer port mapping for this platform…"
+      extra_args="--enable-lb-port-mapping"
+      ;;
+  esac
+
   # Run cloud-provider-kind as Docker container
   docker run -d \
     --name cloud-provider-kind \
     --rm \
     --network host \
     -v /var/run/docker.sock:/var/run/docker.sock \
-    "registry.k8s.io/cloud-provider-kind/cloud-controller-manager:${version}"
+    "registry.k8s.io/cloud-provider-kind/cloud-controller-manager:${version}" \
+    $extra_args
 
   # Wait for it to start
   log_info "Waiting for cloud-provider-kind to start…"

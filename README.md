@@ -6,8 +6,7 @@ Local Kubernetes cluster with ArgoCD and Gateway API — all managed by an idemp
 
 > Editable diagram: [`docs/architecture.drawio`](docs/architecture.drawio) — open in [draw.io](https://app.diagrams.net/).
 
-![Architecture diagram](./docs/architecture.drawio.png)
-
+**Note:** On macOS and Windows, cloud-provider-kind automatically enables LoadBalancer port mapping (`--enable-lb-port-mapping`) to allow direct host access to services without port-forwarding.
 
 ### How traffic reaches ArgoCD
 
@@ -15,10 +14,14 @@ Local Kubernetes cluster with ArgoCD and Gateway API — all managed by an idemp
 Browser ──► localhost:80 (host machine)
                  │
                  ▼
-         kind cluster port mapping (80)
+     cloud-provider-kind port mapping
+     (auto-enabled on macOS/Windows)
                  │
                  ▼
-         cloud-provider-kind Gateway Controller
+      kind cluster port mapping (80)
+                 │
+                 ▼
+      cloud-provider-kind Gateway Controller
                  │
                  ▼
          Gateway: main-gateway
@@ -27,10 +30,10 @@ Browser ──► localhost:80 (host machine)
          HTTPRoute: argocd.local
                  │
                  ▼
-         argocd-server Service (:443)
+       argocd-server Service (:443)
                  │
                  ▼
-         ArgoCD Pod (HTTP, insecure mode)
+      ArgoCD Pod (HTTP, insecure mode)
 ```
 
 **Access:** Add `127.0.0.1 argocd.local` to `/etc/hosts` and visit `http://argocd.local`
@@ -107,7 +110,7 @@ Available flags:
 
 ## Accessing ArgoCD
 
-After deploy completes, cloud-provider-kind bridges the kind cluster network to your host machine using Docker's host network mode. ArgoCD is accessible directly via hostname without port-forward.
+After deploy completes, cloud-provider-kind bridges the kind cluster network to your host machine. On **macOS and Windows**, the `--enable-lb-port-mapping` flag is automatically enabled to map LoadBalancer ports to the host.
 
 **Quick Setup:**
 ```bash
@@ -152,7 +155,7 @@ echo "127.0.0.1 argocd.local" | sudo tee -a /etc/hosts
 | Component | Purpose |
 |-----------|---------|
 | **kind** | Local K8s cluster running in Docker |
-| **cloud-provider-kind** | Gateway Controller + LoadBalancer provider for kind (uses host network to bridge networking) |
+| **cloud-provider-kind** | Gateway Controller + LoadBalancer provider for kind (enables port mapping on macOS/Windows for host access) |
 | **Gateway API** | Standard ingress (`Gateway`, `HTTPRoute` CRDs) — cloud-provider-kind is the controller |
 | **ArgoCD** | GitOps continuous delivery — deploys apps from `argocd-apps/` |
 
