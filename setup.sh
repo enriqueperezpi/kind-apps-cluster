@@ -245,9 +245,11 @@ show_menu() {
   echo -e "  ${BOLD}8)${NC} ArgoCD local access (port-forward)"
   echo -e "  ${BOLD}9)${NC} Delete cluster"
   echo ""
-  echo -e "  ${BOLD}A)${NC} Enable application (use: --enable <app>)"
-  echo -e "  ${BOLD}D)${NC} Disable application (use: --disable <app>)"
-  echo -e "  ${BOLD}L)${NC} List applications (use: --list-apps)"
+  echo -e "  ${DIM}CLI flags:${NC}"
+  echo -e "  ${DIM}  --list-apps          List available apps${NC}"
+  echo -e "  ${DIM}  --enable <app>       Enable an app before applying${NC}"
+  echo -e "  ${DIM}  --disable <app>      Disable an app (comments out YAML)${NC}"
+  echo -e "  ${DIM}  -y                   Non-interactive full deploy${NC}"
   echo ""
   echo -e "  ${BOLD}0)${NC} Exit"
   echo ""
@@ -294,9 +296,6 @@ main() {
       7) action_get_argocd_password ;;
       8) action_argocd_local_access ;;
       9) action_delete_cluster ;;
-      a|A) log_info "Use CLI: ./setup.sh --enable <app-name>" ;;
-      d|D) log_info "Use CLI: ./setup.sh --disable <app-name>" ;;
-      l|L) log_info "Use CLI: ./setup.sh --list-apps" ;;
       0) echo "Bye."; exit 0 ;;
       *) log_warn "Invalid option." ;;
     esac

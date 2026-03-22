@@ -96,10 +96,26 @@ EOF
 
 # ── ArgoCD Apps Management ────────────────────────────────────────────────────
 
-# Check if app is enabled (has .enabled file or no .disabled file)
+# Check if app is enabled (YAML is not commented out)
 is_app_enabled() {
   local app_dir="$1"
-  [[ -f "${app_dir}/.enabled" ]] && ! [[ -f "${app_dir}/.disabled" ]]
+  local app_file
+  
+  # Find the application file
+  if [[ -f "${app_dir}/application.yaml" ]]; then
+    app_file="${app_dir}/application.yaml"
+  elif [[ -f "${app_dir}/application.yml" ]]; then
+    app_file="${app_dir}/application.yml"
+  else
+    return 1
+  fi
+  
+  # Check if file has non-commented content (lines not starting with #)
+  # A valid YAML app has at least one line that doesn't start with # or whitespace
+  if grep -v '^[[:space:]]*#' "$app_file" | grep -v '^[[:space:]]*$' | grep -q '^[[:space:]]*apiVersion:'; then
+    return 0
+  fi
+  return 1
 }
 
 # List all apps in argocd-apps directory
@@ -149,9 +165,10 @@ list_argocd_apps() {
   done
   
   echo ""
-  echo "To enable/disable apps:"
-  echo "  touch ${apps_dir}/<app-name>/.enabled   # Enable"
-  echo "  touch ${apps_dir}/<app-name>/.disabled  # Disable"
+  echo "Use CLI to manage apps:"
+  echo "  ./setup.sh --list-apps           List apps"
+  echo "  ./setup.sh --enable <app>       Enable (uncomment YAML)"
+  echo "  ./setup.sh --disable <app>      Disable (comment YAML)"
   echo ""
 }
 
@@ -212,7 +229,7 @@ apply_argocd_apps() {
   fi
 }
 
-# Enable an app
+# Enable an app (uncomment YAML)
 enable_argocd_app() {
   local app_name="${1:-}"
   local apps_dir="${ARGOCD_APPS_DIR:-./argocd-apps}"
@@ -223,23 +240,39 @@ enable_argocd_app() {
   fi
   
   local app_dir="${apps_dir}/${app_name}"
+  local app_file=""
   
   if [[ ! -d "$app_dir" ]]; then
     log_error "Application '${app_name}' not found in '${apps_dir}'."
     return 1
   fi
   
-  # Remove disabled marker if exists
-  rm -f "${app_dir}/.disabled"
+  if [[ -f "${app_dir}/application.yaml" ]]; then
+    app_file="${app_dir}/application.yaml"
+  elif [[ -f "${app_dir}/application.yml" ]]; then
+    app_file="${app_dir}/application.yml"
+  else
+    log_error "No application.yaml or application.yml found in '${app_dir}'."
+    return 1
+  fi
   
-  # Create enabled marker
-  touch "${app_dir}/.enabled"
+  # Check if already enabled
+  if is_app_enabled "$app_dir"; then
+    log_info "Application '${app_name}' is already enabled."
+    return 0
+  fi
+  
+  # Uncomment YAML content using sed (macOS compatible)
+  local tmp_file
+  tmp_file=$(mktemp)
+  sed 's/^# //' "$app_file" > "$tmp_file"
+  mv "$tmp_file" "$app_file"
   
   log_success "Enabled application '${app_name}'"
-  log_info "Apply changes with option 5 (Apply ArgoCD applications)"
+  log_info "Apply with option 5 or run: kubectl apply -f ${app_file}"
 }
 
-# Disable an app
+# Disable an app (comment YAML)
 disable_argocd_app() {
   local app_name="${1:-}"
   local apps_dir="${ARGOCD_APPS_DIR:-./argocd-apps}"
@@ -250,26 +283,52 @@ disable_argocd_app() {
   fi
   
   local app_dir="${apps_dir}/${app_name}"
+  local app_file=""
   
   if [[ ! -d "$app_dir" ]]; then
     log_error "Application '${app_name}' not found in '${apps_dir}'."
     return 1
   fi
   
-  # Remove enabled marker if exists
-  rm -f "${app_dir}/.enabled"
+  if [[ -f "${app_dir}/application.yaml" ]]; then
+    app_file="${app_dir}/application.yaml"
+  elif [[ -f "${app_dir}/application.yml" ]]; then
+    app_file="${app_dir}/application.yml"
+  else
+    log_error "No application.yaml or application.yml found in '${app_dir}'."
+    return 1
+  fi
   
-  # Create disabled marker
-  touch "${app_dir}/.disabled"
+  # Check if already disabled
+  if ! is_app_enabled "$app_dir"; then
+    log_info "Application '${app_name}' is already disabled."
+    return 0
+  fi
+  
+  # Comment YAML content (add # to non-comment, non-empty lines)
+  local tmp_file
+  tmp_file=$(mktemp)
+  
+  while IFS= read -r line; do
+    # If line is empty or only whitespace, keep as-is
+    if [[ -z "${line// }" ]]; then
+      echo "$line"
+    # If line already starts with # (possibly with whitespace), keep as-is
+    elif [[ "$line" =~ ^[[:space:]]*# ]]; then
+      echo "$line"
+    else
+      echo "# $line"
+    fi
+  done < "$app_file" > "$tmp_file"
+  
+  mv "$tmp_file" "$app_file"
   
   log_success "Disabled application '${app_name}'"
-  log_info "Changes will take effect on next apply"
+  log_info "It will be skipped on next apply"
   
   # Optionally remove from cluster
-  if [[ -f "${app_dir}/application.yaml" ]]; then
-    log_info "To also remove from cluster, run:"
-    log_info "  kubectl delete -f ${app_dir}/application.yaml"
-  fi
+  log_info "To also remove from cluster, run:"
+  log_info "  kubectl delete -f ${app_file}"
 }
 
 argocd_admin_password() {
@@ -326,14 +385,45 @@ argocd_status() {
   echo "  - Or visit: http://localhost:8080"
   echo "  - Get password: ./setup.sh (option 7)"
   
+  # List local applications (from argocd-apps folder)
+  local apps_dir="${ARGOCD_APPS_DIR:-./argocd-apps}"
+  local local_apps=()
+  while IFS= read -r -d '' app_file; do
+    local app_dir
+    app_dir=$(dirname "$app_file")
+    local app_name
+    app_name=$(basename "$app_dir")
+    local status="disabled"
+    if is_app_enabled "$app_dir"; then
+      status="enabled"
+    fi
+    local_apps+=("${app_name}:${status}")
+  done < <(find "$apps_dir" \( -name 'application.yaml' -o -name 'application.yml' \) -print0 2>/dev/null)
+  
+  if [[ ${#local_apps[@]} -gt 0 ]]; then
+    echo ""
+    echo "  Local Apps (argocd-apps/):"
+    for app_info in "${local_apps[@]}"; do
+      local name="${app_info%%:*}"
+      local status="${app_info##*:}"
+      local icon="○"
+      if [[ "$status" == "enabled" ]]; then
+        icon="●"
+      fi
+      echo "    ${icon} ${name} (${status})"
+    done
+    echo ""
+    echo "  Managed Apps (in cluster):"
+  fi
+  
   # List deployed applications
   local app_count
   app_count=$(kubectl get applications -n "$ARGOCD_NAMESPACE" --no-headers 2>/dev/null | wc -l | tr -d ' ')
   if [[ "$app_count" -gt 0 ]]; then
-    echo ""
-    echo "  ArgoCD Applications (${app_count}):"
     kubectl get applications -n "$ARGOCD_NAMESPACE" --no-headers 2>/dev/null | while read -r line; do
       echo "    $line"
     done
+  else
+    echo "    (none deployed)"
   fi
 }
