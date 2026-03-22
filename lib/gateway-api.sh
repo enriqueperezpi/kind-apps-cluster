@@ -105,7 +105,7 @@ spec:
         value: /
     backendRefs:
     - name: argocd-server
-      port: 443
+      port: 80
 EOF
 
   log_success "Gateway (main-gateway) and HTTPRoute (argocd-route) created."
