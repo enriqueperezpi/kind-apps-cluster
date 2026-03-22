@@ -4,8 +4,6 @@ Local Kubernetes cluster with ArgoCD and Cilium Gateway API — all managed by a
 
 ## Architecture
 
-> Editable diagram: [`docs/architecture.drawio`](docs/architecture.drawio) — open in [draw.io](https://app.diagrams.net/).
-
 **Key design:** Uses **Cilium CNI** as the networking layer with **Gateway API** for HTTP routing. Each application gets a **HTTPRoute** for public access. This is the modern, standard approach for Kubernetes ingress.
 
 ### How traffic reaches ArgoCD
