@@ -58,8 +58,10 @@ git clone <repo-url> && cd kind-apps-cluster
 vim config.conf
 
 # 3. Run full deploy
-./setup.sh          # interactive menu
-./setup.sh -y       # non-interactive full deploy
+./setup.sh                          # interactive menu
+./setup.sh -y                       # non-interactive full deploy
+./setup.sh -f /path/to/config.conf  # use custom config file
+./setup.sh -y -f config-prod.conf   # non-interactive with custom config
 ```
 
 After the deploy completes:
@@ -86,11 +88,22 @@ After the deploy completes:
 
 Every option is **idempotent** — you can run any of them multiple times safely.
 
-### Custom Config File
+### Command-Line Flags
 
 ```bash
-./setup.sh /path/to/my-config.conf
+# Non-interactive mode (automatic full deploy)
+./setup.sh -y
+
+# Custom config file
+./setup.sh -f /path/to/config.conf
+
+# Combine flags
+./setup.sh -y -f staging-config.conf
 ```
+
+Available flags:
+- `-y, --yes` : Skip interactive menu and run full deploy automatically
+- `-f, --config <file>` : Use custom configuration file instead of `config.conf`
 
 ## Accessing ArgoCD
 
@@ -123,7 +136,7 @@ echo "127.0.0.1 argocd.local" | sudo tee -a /etc/hosts
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `CLUSTER_NAME` | `kind-apps-cluster` | kind cluster name |
-| `K8S_VERSION` | `v1.32.3` | Kubernetes version (kind node image tag) |
+| `K8S_VERSION` | `v1.33.2` | Kubernetes version (kind node image tag) |
 | `WORKER_NODES` | `1` | Number of worker nodes |
 | `ARGOCD_NAMESPACE` | `argocd` | Namespace for ArgoCD |
 | `ARGOCD_VERSION` | `stable` | ArgoCD manifest version |

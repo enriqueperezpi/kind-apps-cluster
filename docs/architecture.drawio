@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<mxfile host="app.diagrams.net" modified="2026-03-22T00:00:00.000Z" agent="draw.io" version="24.0.0" type="device">
+<mxfile host="app.diagrams.net" modified="2026-03-22T12:00:00.000Z" agent="draw.io" version="24.0.0" type="device">
   <diagram name="Architecture" id="kind-apps-cluster-arch">
     <mxGraphModel dx="1422" dy="762" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1100" pageHeight="850" math="0" shadow="0">
       <root>
@@ -12,27 +12,27 @@
         </mxCell>
 
         <!-- Browser -->
-        <mxCell id="browser" value="&lt;b&gt;Browser&lt;/b&gt;&lt;br&gt;http://localhost:8080" style="shape=image;verticalLabelPosition=bottom;labelBackgroundColor=default;verticalAlign=top;aspect=fixed;imageAspect=0;image=data:image/svg+xml,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSI0OCIgaGVpZ2h0PSI0OCIgdmlld0JveD0iMCAwIDI0IDI0IiBmaWxsPSJub25lIiBzdHJva2U9IiMzMzMiIHN0cm9rZS13aWR0aD0iMS41IiBzdHJva2UtbGluZWNhcD0icm91bmQiIHN0cm9rZS1saW5lam9pbj0icm91bmQiPjxyZWN0IHg9IjIiIHk9IjMiIHdpZHRoPSIyMCIgaGVpZ2h0PSIxOCIgcng9IjIiIHJ5PSIyIj48L3JlY3Q+PGxpbmUgeDE9IjIiIHkxPSI4IiB4Mj0iMjIiIHkyPSI4Ij48L2xpbmU+PGNpcmNsZSBjeD0iNiIgY3k9IjUuNSIgcj0iMSI+PC9jaXJjbGU+PGNpcmNsZSBjeD0iOSIgY3k9IjUuNSIgcj0iMSI+PC9jaXJjbGU+PC9zdmc+;rounded=0;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;" vertex="1" parent="host-box">
+        <mxCell id="browser" value="&lt;b&gt;Browser / /etc/hosts&lt;/b&gt;&lt;br&gt;127.0.0.1 argocd.local" style="shape=image;verticalLabelPosition=bottom;labelBackgroundColor=default;verticalAlign=top;aspect=fixed;imageAspect=0;image=data:image/svg+xml,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSI0OCIgaGVpZ2h0PSI0OCIgdmlld0JveD0iMCAwIDI0IDI0IiBmaWxsPSJub25lIiBzdHJva2U9IiMzMzMiIHN0cm9rZS13aWR0aD0iMS41IiBzdHJva2UtbGluZWNhcD0icm91bmQiIHN0cm9rZS1saW5lam9pbj0icm91bmQiPjxyZWN0IHg9IjIiIHk9IjMiIHdpZHRoPSIyMCIgaGVpZ2h0PSIxOCIgcng9IjIiIHJ5PSIyIj48L3JlY3Q+PGxpbmUgeDE9IjIiIHkxPSI4IiB4Mj0iMjIiIHkyPSI4Ij48L2xpbmU+PGNpcmNsZSBjeD0iNiIgY3k9IjUuNSIgcj0iMSI+PC9jaXJjbGU+PGNpcmNsZSBjeD0iOSIgY3k9IjUuNSIgcj0iMSI+PC9jaXJjbGU+PC9zdmc+;rounded=0;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;" vertex="1" parent="host-box">
           <mxGeometry x="80" y="80" width="120" height="80" as="geometry" />
         </mxCell>
 
-        <!-- kubectl port-forward -->
-        <mxCell id="portfwd" value="&lt;b&gt;kubectl port-forward&lt;/b&gt;&lt;br&gt;localhost:8080 → argocd-server:443" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=11;" vertex="1" parent="host-box">
-          <mxGeometry x="280" y="65" width="230" height="60" as="geometry" />
+        <!-- cloud-provider-kind (host network) -->
+        <mxCell id="cpk-docker" value="&lt;b&gt;Docker Container&lt;/b&gt;&lt;br&gt;cloud-provider-kind&lt;br&gt;(--network host)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#c8e6c9;strokeColor=#388e3c;fontSize=11;" vertex="1" parent="host-box">
+          <mxGeometry x="280" y="65" width="230" height="70" as="geometry" />
         </mxCell>
 
         <!-- kind cluster boundary -->
-        <mxCell id="kind-box" value="kind Cluster" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e6f4ea;strokeColor=#137333;dashed=0;fontStyle=1;fontSize=14;verticalAlign=top;spacingTop=8;spacingLeft=8;" vertex="1" parent="host-box">
+        <mxCell id="kind-box" value="kind Cluster (Docker)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e6f4ea;strokeColor=#137333;dashed=0;fontStyle=1;fontSize=14;verticalAlign=top;spacingTop=8;spacingLeft=8;" vertex="1" parent="host-box">
           <mxGeometry x="40" y="180" width="940" height="540" as="geometry" />
         </mxCell>
 
-        <!-- Cilium -->
-        <mxCell id="cilium" value="&lt;b&gt;Cilium&lt;/b&gt;&lt;br&gt;CNI + Gateway Controller" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=12;" vertex="1" parent="kind-box">
-          <mxGeometry x="250" y="60" width="180" height="60" as="geometry" />
+        <!-- cloud-provider-kind Controller -->
+        <mxCell id="cpk-controller" value="&lt;b&gt;cloud-provider-kind&lt;/b&gt;&lt;br&gt;Gateway Controller&lt;br&gt;+ xDS Server" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#c8e6c9;strokeColor=#388e3c;fontSize=12;" vertex="1" parent="kind-box">
+          <mxGeometry x="250" y="60" width="180" height="75" as="geometry" />
         </mxCell>
 
         <!-- Gateway API -->
-        <mxCell id="gateway" value="&lt;b&gt;Gateway&lt;/b&gt;&lt;br&gt;argocd-gateway&lt;br&gt;port 80 / HTTP" style="shape=mxgraph.k8s.gateway;rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=11;" vertex="1" parent="kind-box">
+        <mxCell id="gateway" value="&lt;b&gt;Gateway&lt;/b&gt;&lt;br&gt;main-gateway&lt;br&gt;port 80 / HTTP" style="shape=mxgraph.k8s.gateway;rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=11;" vertex="1" parent="kind-box">
           <mxGeometry x="290" y="170" width="120" height="80" as="geometry" />
         </mxCell>
 
@@ -41,13 +41,18 @@
           <mxGeometry x="470" y="170" width="140" height="80" as="geometry" />
         </mxCell>
 
+        <!-- Envoy Gateway Container -->
+        <mxCell id="envoy" value="&lt;b&gt;Envoy Proxy&lt;/b&gt;&lt;br&gt;Gateway Container&lt;br&gt;(xDS controlled)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#c8e6c9;strokeColor=#388e3c;fontSize=11;" vertex="1" parent="kind-box">
+          <mxGeometry x="680" y="60" width="160" height="75" as="geometry" />
+        </mxCell>
+
         <!-- ArgoCD Namespace box -->
         <mxCell id="argocd-ns" value="Namespace: argocd" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#999999;dashed=1;fontStyle=3;fontSize=11;verticalAlign=top;spacingTop=6;spacingLeft=6;" vertex="1" parent="kind-box">
           <mxGeometry x="400" y="290" width="260" height="210" as="geometry" />
         </mxCell>
 
         <!-- ArgoCD Server -->
-        <mxCell id="argocd" value="&lt;b&gt;ArgoCD Server&lt;/b&gt;&lt;br&gt;argocd-server&lt;br&gt;port 443 (insecure HTTP)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;fontSize=12;" vertex="1" parent="argocd-ns">
+        <mxCell id="argocd" value="&lt;b&gt;ArgoCD Server&lt;/b&gt;&lt;br&gt;argocd-server&lt;br&gt;port 80 (HTTP insecure)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;fontSize=12;" vertex="1" parent="argocd-ns">
           <mxGeometry x="50" y="50" width="170" height="65" as="geometry" />
         </mxCell>
 
@@ -61,14 +66,9 @@
           <mxGeometry x="140" y="145" width="80" height="45" as="geometry" />
         </mxCell>
 
-        <!-- cert-manager -->
-        <mxCell id="certmgr" value="&lt;b&gt;cert-manager&lt;/b&gt;&lt;br&gt;selfsigned ClusterIssuer" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=12;" vertex="1" parent="kind-box">
-          <mxGeometry x="720" y="60" width="180" height="60" as="geometry" />
-        </mxCell>
-
         <!-- Gateway API CRDs -->
         <mxCell id="gwcrds" value="&lt;b&gt;Gateway API CRDs&lt;/b&gt;&lt;br&gt;Gateway, HTTPRoute, ..." style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=11;" vertex="1" parent="kind-box">
-          <mxGeometry x="60" y="60" width="160" height="60" as="geometry" />
+          <mxGeometry x="60" y="60" width="160" height="75" as="geometry" />
         </mxCell>
 
         <!-- Worker node hint -->
@@ -88,18 +88,23 @@
 
         <!-- ===== ARROWS ===== -->
 
-        <!-- Browser → port-forward -->
-        <mxCell id="e1" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeWidth=2;strokeColor=#d6b656;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" edge="1" source="browser" target="portfwd" parent="host-box">
+        <!-- Browser → cloud-provider-kind (host network) -->
+        <mxCell id="e1" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeWidth=2;strokeColor=#388e3c;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" edge="1" source="browser" target="cpk-docker" parent="host-box">
           <mxGeometry relative="1" as="geometry" />
         </mxCell>
 
-        <!-- port-forward → ArgoCD Server -->
-        <mxCell id="e2" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeWidth=2;strokeColor=#d6b656;dashed=1;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" edge="1" source="portfwd" target="argocd" parent="1">
+        <!-- cloud-provider-kind (host) → kind cluster -->
+        <mxCell id="e1b" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeWidth=2;strokeColor=#388e3c;dashed=1;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" edge="1" source="cpk-docker" target="cpk-controller" parent="1">
           <mxGeometry relative="1" as="geometry" />
         </mxCell>
 
-        <!-- Cilium → Gateway -->
-        <mxCell id="e3" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#82b366;strokeWidth=2;" edge="1" source="cilium" target="gateway" parent="kind-box">
+        <!-- cloud-provider-kind Controller → Gateway -->
+        <mxCell id="e3" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#388e3c;strokeWidth=2;" edge="1" source="cpk-controller" target="gateway" parent="kind-box">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <!-- cloud-provider-kind Controller → Envoy -->
+        <mxCell id="e3b" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#388e3c;strokeWidth=2;" edge="1" source="cpk-controller" target="envoy" parent="kind-box">
           <mxGeometry relative="1" as="geometry" />
         </mxCell>
 
@@ -110,6 +115,11 @@
 
         <!-- HTTPRoute → ArgoCD Server -->
         <mxCell id="e5" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#9673a6;strokeWidth=2;dashed=1;" edge="1" source="httproute" target="argocd" parent="kind-box">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <!-- Envoy ↔ Kubernetes Services -->
+        <mxCell id="e5b" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#388e3c;strokeWidth=2;dashed=1;" edge="1" source="envoy" target="argocd" parent="kind-box">
           <mxGeometry relative="1" as="geometry" />
         </mxCell>
 

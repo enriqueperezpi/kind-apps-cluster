@@ -16,8 +16,29 @@ run_step() {
   fi
 }
 
+# ── Parse command-line arguments ────────────────────────────
+NON_INTERACTIVE=false
+CONFIG_FILE="${SCRIPT_DIR}/config.conf"
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -y|--yes)
+      NON_INTERACTIVE=true
+      shift
+      ;;
+    -f|--config)
+      CONFIG_FILE="$2"
+      shift 2
+      ;;
+    *)
+      echo -e "\033[1;31m[ERROR]\033[0m  Unknown option: $1"
+      echo "Usage: $0 [-y|--yes] [-f|--config <file>]"
+      exit 1
+      ;;
+  esac
+done
+
 # ── Load config ──────────────────────────────────────────────
-CONFIG_FILE="${1:-${SCRIPT_DIR}/config.conf}"
 if [[ -f "$CONFIG_FILE" ]]; then
   # shellcheck source=config.conf
   source "$CONFIG_FILE"
@@ -145,7 +166,7 @@ show_menu() {
 }
 
 main() {
-  if [[ "${1:-}" == "--non-interactive" || "${1:-}" == "-y" ]]; then
+  if [[ "$NON_INTERACTIVE" == true ]]; then
     action_full_deploy
     return
   fi
@@ -170,4 +191,4 @@ main() {
   done
 }
 
-main "$@"
+main
