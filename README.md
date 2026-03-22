@@ -31,7 +31,7 @@ Browser ──► argocd.local
                   ▼
          kind cluster with Cilium CNI
       ┌─────────────────────────────────────┐
-      │  Cilium Gateway API Controller        │
+      │  Cilium Gateway API Controller      │
       │  - Manages Gateway resources        │
       └─────────────────────────────────────┘
                   │
@@ -39,7 +39,7 @@ Browser ──► argocd.local
          Gateway + HTTPRoute
       ┌─────────────────────────────────────┐
       │  Gateway: cilium-gateway            │
-      │  HTTPRoute: argocd.local → :80    │
+      │  HTTPRoute: argocd.local → :80      │
       └─────────────────────────────────────┘
                   │
                   ▼

@@ -9,6 +9,8 @@ source "${SCRIPT_DIR}/lib/utils.sh"
 # Configuration from config.conf
 CILIUM_VERSION="${CILIUM_VERSION:-1.17.2}"
 CILIUM_NAMESPACE="cilium"
+ARGOCD_LOCAL_PORT="${ARGOCD_LOCAL_PORT:-8080}"
+PORT_FORWARD_PID_FILE="${SCRIPT_DIR}/.argocd-port-forward.pid"
 
 # ── kubectl context verification ──────────────────────────────────────────────
 _verify_kubectl_for_gateway() {
@@ -206,6 +208,98 @@ create_app_httproutes() {
   done < <(find "$apps_dir" -name 'httproute.yaml' -o -name 'httproute.yml' -print0)
   
   log_success "Created ${count} HTTPRoute(s)."
+}
+
+# ── ArgoCD Local Access (port-forward fallback) ─────────────────────────────────
+start_argocd_port_forward() {
+  if [[ "${CNI_PLUGIN:-kind}" == "cilium" ]]; then
+    return 0
+  fi
+
+  if [[ -f "$PORT_FORWARD_PID_FILE" ]]; then
+    local old_pid
+    old_pid=$(cat "$PORT_FORWARD_PID_FILE" 2>/dev/null)
+    if [[ -n "$old_pid" ]] && kill -0 "$old_pid" 2>/dev/null; then
+      log_info "ArgoCD port-forward already running (PID: ${old_pid})"
+      return 0
+    else
+      rm -f "$PORT_FORWARD_PID_FILE"
+    fi
+  fi
+
+  if ! kubectl get namespace "$ARGOCD_NAMESPACE" &>/dev/null; then
+    log_warn "ArgoCD not installed. Install ArgoCD first."
+    return 1
+  fi
+
+  log_info "Starting ArgoCD port-forward on localhost:${ARGOCD_LOCAL_PORT}…"
+  
+  kubectl port-forward -n "$ARGOCD_NAMESPACE" svc/argocd-server "${ARGOCD_LOCAL_PORT}:80" &>/dev/null &
+  local new_pid=$!
+  echo "$new_pid" > "$PORT_FORWARD_PID_FILE"
+  
+  sleep 2
+  
+  if kill -0 "$new_pid" 2>/dev/null; then
+    log_success "ArgoCD accessible at http://localhost:${ARGOCD_LOCAL_PORT}"
+    return 0
+  else
+    log_error "Failed to start port-forward"
+    rm -f "$PORT_FORWARD_PID_FILE"
+    return 1
+  fi
+}
+
+stop_argocd_port_forward() {
+  if [[ -f "$PORT_FORWARD_PID_FILE" ]]; then
+    local pid
+    pid=$(cat "$PORT_FORWARD_PID_FILE" 2>/dev/null)
+    if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then
+      log_info "Stopping ArgoCD port-forward (PID: ${pid})…"
+      kill "$pid" 2>/dev/null || true
+    fi
+    rm -f "$PORT_FORWARD_PID_FILE"
+  fi
+}
+
+setup_argocd_local_access() {
+  if [[ "${CNI_PLUGIN:-kind}" == "cilium" ]]; then
+    log_info "Using Gateway API for ArgoCD access (Cilium mode)"
+    return 0
+  fi
+  
+  log_info "Setting up ArgoCD localhost access (kind networking mode)…"
+  start_argocd_port_forward
+}
+
+argocd_gateway_info() {
+  if [[ "${CNI_PLUGIN:-kind}" == "cilium" ]]; then
+    echo ""
+    echo "  ArgoCD Access (Gateway API):"
+    echo "  ─────────────────────────────────"
+    echo "  URL: http://argocd.local"
+    echo "  Note: Add '127.0.0.1 argocd.local' to /etc/hosts"
+    echo "  Or use port-forward: kubectl port-forward -n ${ARGOCD_NAMESPACE} svc/argocd-server 8080:80"
+  else
+    echo ""
+    echo "  ArgoCD Access (Port-Forward):"
+    echo "  ─────────────────────────────────"
+    if [[ -f "$PORT_FORWARD_PID_FILE" ]]; then
+      local pid
+      pid=$(cat "$PORT_FORWARD_PID_FILE" 2>/dev/null)
+      if kill -0 "$pid" 2>/dev/null; then
+        echo "  URL: http://localhost:${ARGOCD_LOCAL_PORT}"
+        echo "  Port-forward PID: ${pid}"
+      else
+        echo "  Port-forward not running"
+        echo "  Run: ./setup.sh --argocd-local"
+      fi
+    else
+      echo "  URL: http://localhost:${ARGOCD_LOCAL_PORT}"
+      echo "  Port-forward not running"
+      echo "  Run: ./setup.sh --argocd-local"
+    fi
+  fi
 }
 
 # ── Main install function ────────────────────────────────────────────────────

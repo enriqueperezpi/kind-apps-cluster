@@ -19,6 +19,8 @@ run_step() {
 # ── Parse command-line arguments ────────────────────────────
 NON_INTERACTIVE=false
 CONFIG_FILE="${SCRIPT_DIR}/config.conf"
+TARGET_APP=""
+APP_MODE=""  # "enable", "disable", or ""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -30,9 +32,35 @@ while [[ $# -gt 0 ]]; do
       CONFIG_FILE="$2"
       shift 2
       ;;
+    --enable)
+      TARGET_APP="$2"
+      APP_MODE="enable"
+      shift 2
+      ;;
+    --disable)
+      TARGET_APP="$2"
+      APP_MODE="disable"
+      shift 2
+      ;;
+    --list-apps)
+      TARGET_APP="__list__"
+      shift
+      ;;
+    -h|--help)
+      echo "Usage: $0 [options]"
+      echo ""
+      echo "Options:"
+      echo "  -y, --yes              Non-interactive full deploy"
+      echo "  -f, --config <file>    Use custom config file"
+      echo "  --enable <app>         Enable an application"
+      echo "  --disable <app>        Disable an application"
+      echo "  --list-apps            List all applications"
+      echo "  -h, --help             Show this help"
+      exit 0
+      ;;
     *)
       echo -e "\033[1;31m[ERROR]\033[0m  Unknown option: $1"
-      echo "Usage: $0 [-y|--yes] [-f|--config <file>]"
+      echo "Usage: $0 [-y|--yes] [-f|--config <file>] [--enable <app>] [--disable <app>]"
       exit 1
       ;;
   esac
@@ -100,6 +128,7 @@ action_full_deploy() {
   run_step "Patch ArgoCD server"          patch_argocd_server
   run_step "Create ArgoCD Gateway"        create_argocd_gateway
   run_step "Apply ArgoCD apps"            apply_argocd_apps
+  run_step "Setup ArgoCD local access"    setup_argocd_local_access
 
   header "Deploy Summary"
   cluster_status
@@ -138,7 +167,35 @@ action_install_argocd() {
 action_apply_apps() {
   need_cluster || return
   header "Apply ArgoCD Applications"
+  list_argocd_apps
   apply_argocd_apps
+}
+
+action_list_apps() {
+  header "ArgoCD Applications"
+  list_argocd_apps
+}
+
+action_enable_app() {
+  header "Enable Application"
+  local app_name="${1:-}"
+  if [[ -z "$app_name" ]]; then
+    list_argocd_apps
+    echo "Usage: ./setup.sh --enable <app-name>"
+    return 0
+  fi
+  enable_argocd_app "$app_name"
+}
+
+action_disable_app() {
+  header "Disable Application"
+  local app_name="${1:-}"
+  if [[ -z "$app_name" ]]; then
+    list_argocd_apps
+    echo "Usage: ./setup.sh --disable <app-name>"
+    return 0
+  fi
+  disable_argocd_app "$app_name"
 }
 
 action_status() {
@@ -163,33 +220,62 @@ action_delete_cluster() {
 
 action_port_forward_argocd() {
   need_cluster || return
-  header "Port-Forward ArgoCD"
-  echo -e "  Forwarding ${BOLD}localhost:8080 -> argocd-server:443${NC}"
-  echo -e "  Open: ${BOLD}http://localhost:8080${NC}"
-  echo -e "  Press Ctrl+C to stop."
-  echo ""
-  kubectl port-forward -n "$ARGOCD_NAMESPACE" svc/argocd-server 8080:443
+  setup_argocd_local_access
+  argocd_gateway_info
+}
+
+action_argocd_local_access() {
+  need_cluster || return
+  header "ArgoCD Local Access"
+  setup_argocd_local_access
+  argocd_gateway_info
 }
 
 # ── Menu ─────────────────────────────────────────────────────
 show_menu() {
-  header "kind-apps-cluster  —  Local K8s + ArgoCD + Cilium"
+  header "kind-apps-cluster  —  Local K8s + ArgoCD + Gateway API"
   echo ""
-  echo -e "  ${BOLD}1)${NC} Full deploy (cluster + cilium + argocd + apps)"
+  echo -e "  ${BOLD}1)${NC} Full deploy (cluster + ${CNI_PLUGIN:-kind} + argocd + apps)"
   echo -e "  ${BOLD}2)${NC} Create / verify kind cluster only"
   echo -e "  ${BOLD}3)${NC} Install Gateway API + Cilium controller"
   echo -e "  ${BOLD}4)${NC} Install ArgoCD"
   echo -e "  ${BOLD}5)${NC} Apply ArgoCD applications from ${ARGOCD_APPS_DIR}"
   echo -e "  ${BOLD}6)${NC} Show status of all components"
   echo -e "  ${BOLD}7)${NC} Get ArgoCD admin password"
-  echo -e "  ${BOLD}8)${NC} Port-forward ArgoCD (http://localhost:8080)"
+  echo -e "  ${BOLD}8)${NC} ArgoCD local access (port-forward)"
   echo -e "  ${BOLD}9)${NC} Delete cluster"
+  echo ""
+  echo -e "  ${BOLD}A)${NC} Enable application (use: --enable <app>)"
+  echo -e "  ${BOLD}D)${NC} Disable application (use: --disable <app>)"
+  echo -e "  ${BOLD}L)${NC} List applications (use: --list-apps)"
   echo ""
   echo -e "  ${BOLD}0)${NC} Exit"
   echo ""
 }
 
 main() {
+  # Handle --list-apps first
+  if [[ "$TARGET_APP" == "__list__" ]]; then
+    source "${SCRIPT_DIR}/lib/argocd.sh"
+    action_list_apps
+    return
+  fi
+
+  # Handle --enable and --disable
+  if [[ -n "$APP_MODE" ]]; then
+    source "${SCRIPT_DIR}/lib/argocd.sh"
+    case "$APP_MODE" in
+      enable)
+        action_enable_app "$TARGET_APP"
+        ;;
+      disable)
+        action_disable_app "$TARGET_APP"
+        ;;
+    esac
+    return
+  fi
+
+  # Non-interactive full deploy
   if [[ "$NON_INTERACTIVE" == true ]]; then
     action_full_deploy
     return
@@ -206,8 +292,11 @@ main() {
       5) action_apply_apps ;;
       6) action_status ;;
       7) action_get_argocd_password ;;
-      8) action_port_forward_argocd ;;
+      8) action_argocd_local_access ;;
       9) action_delete_cluster ;;
+      a|A) log_info "Use CLI: ./setup.sh --enable <app-name>" ;;
+      d|D) log_info "Use CLI: ./setup.sh --disable <app-name>" ;;
+      l|L) log_info "Use CLI: ./setup.sh --list-apps" ;;
       0) echo "Bye."; exit 0 ;;
       *) log_warn "Invalid option." ;;
     esac
