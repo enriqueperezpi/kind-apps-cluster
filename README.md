@@ -47,31 +47,6 @@ Browser ──► argocd.local
 ```
 
 **Access:** Add `127.0.0.1 argocd.local` to `/etc/hosts`, then visit `http://argocd.local`
-Browser ──► argocd.local (host machine)
-                  │
-                  ▼
-         kind cluster with Cilium CNI
-     ┌─────────────────────────────────────┐
-     │  Cilium Gateway API Controller      │
-     │  - Manages Gateway resources        │
-     │  - Configures L7 routing            │
-     └─────────────────────────────────────┘
-                  │
-                  ▼
-         Gateway + HTTPRoute
-     ┌─────────────────────────────────────┐
-     │  Gateway: cilium-gateway            │
-     │  HTTPRoute: argocd.local → :80      │
-     └─────────────────────────────────────┘
-                  │
-                  ▼
-      ArgoCD Service (ClusterIP:80)
-                  │
-                  ▼
-      ArgoCD Pod (HTTP, insecure mode)
-```
-
-**Access:** Add `127.0.0.1 argocd.local` to `/etc/hosts` and visit `http://argocd.local`
 
 **Adding new apps:** Create a HTTPRoute in your app's folder to expose it at `http://appname.local`
 
@@ -180,7 +155,7 @@ echo "127.0.0.1 argocd.local" | sudo tee -a /etc/hosts
 | `CILIUM_VERSION` | `1.17.2` | Cilium version (only if CNI_PLUGIN=cilium) |
 | `GATEWAY_CLASS_NAME` | `cilium` | Gateway API controller class |
 | `ARGOCD_NAMESPACE` | `argocd` | Namespace for ArgoCD and Gateway |
-| `ARGOCD_VERSION` | `stable` | ArgoCD manifest version |
+| `ARGOCD_VERSION` | `stable` | ArgoCD manifest version. specific version is possible |
 | `ARGOCD_APPS_DIR` | `./argocd-apps` | Directory with Application/ApplicationSet YAMLs |
 | `AUTO_INSTALL_TOOLS` | `true` | Auto-install missing CLI tools |
 | `HTTP_PORT` | `80` | Host port exposed by kind node |
@@ -250,37 +225,15 @@ kind-apps-cluster/
 │   ├── argocd.sh          # ArgoCD install, insecure config, apps deployer
 │   └── gateway-api.sh     # Cilium Gateway API controller
 ├── argocd-apps/           # ArgoCD Application definitions + HTTPRoutes
-│   ├── README.md          # Apps deployment guide
-│   ├── guestbook/         # Example app
-│   │   ├── application.yaml
-│   │   ├── httproute.yaml
-│   │   └── values.yaml
-│   └── (your-apps)/       # Add your apps here
-│       ├── application.yaml
-│       ├── httproute.yaml
-│       └── values.yaml
-└── docs/
-    └── architecture.drawio  # Editable diagram (open in draw.io)
-```
-kind-apps-cluster/
-├── setup.sh                # Main entry point (menu + non-interactive)
-├── config.conf             # All configurable parameters
-├── lib/
-│   ├── utils.sh            # Logging, wait helpers
-│   ├── tools.sh            # Tool detection & installation
-│   ├── kind.sh             # kind cluster lifecycle (health checks)
-│   ├── argocd.sh           # ArgoCD install, insecure config, apps deployer
-│   └── gateway-api.sh      # Nginx reverse proxy + hostNetwork DaemonSet
-├── argocd-apps/            # ArgoCD Application definitions
-│   ├── README.md           # Apps deployment guide
-│   ├── guestbook/          # Example app
-│   │   ├── application.yaml
-│   │   └── values.yaml
-│   └── (your-apps)/        # Add your apps here
-│       ├── application.yaml
-│       └── values.yaml
-└── docs/
-    └── architecture.drawio  # Editable diagram (open in draw.io)
+    ├── README.md          # Apps deployment guide
+    ├── guestbook/         # Example app
+    │   ├── application.yaml
+    │   ├── httproute.yaml
+    │   └── values.yaml
+    └── (your-apps)/       # Add your apps here
+        ├── application.yaml
+        ├── httproute.yaml
+        └── values.yaml
 ```
 
 ## Idempotency

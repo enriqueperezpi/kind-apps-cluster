@@ -234,6 +234,11 @@ action_argocd_local_access() {
   argocd_gateway_info
 }
 
+action_kill_argocd_port_forward() {
+  header "Stop ArgoCD Port-Forward"
+  stop_argocd_port_forward
+}
+
 # ── Menu ─────────────────────────────────────────────────────
 show_menu() {
   header "kind-apps-cluster  —  Local K8s + ArgoCD + Gateway API"
@@ -246,7 +251,7 @@ show_menu() {
   echo -e "  ${BOLD}6)${NC} Show status of all components"
   echo -e "  ${BOLD}7)${NC} Get ArgoCD admin password"
   echo -e "  ${BOLD}8)${NC} ArgoCD local access (port-forward)"
-  echo -e "  ${BOLD}9)${NC} Delete cluster"
+  echo -e "  ${BOLD}9)${NC} Stop ArgoCD port-forward"
   echo ""
   echo -e "  ${DIM}CLI flags:${NC}"
   echo -e "  ${DIM}  --list-apps          List available apps${NC}"
@@ -254,7 +259,8 @@ show_menu() {
   echo -e "  ${DIM}  --disable <app>      Disable an app (comments out YAML)${NC}"
   echo -e "  ${DIM}  -y                   Non-interactive full deploy${NC}"
   echo ""
-  echo -e "  ${BOLD}0)${NC} Exit"
+  echo -e "  ${BOLD}D)${NC} Delete cluster"
+  echo -e "  ${BOLD}Q)${NC} Exit"
   echo ""
 }
 
@@ -298,8 +304,9 @@ main() {
       6) action_status ;;
       7) action_get_argocd_password ;;
       8) action_argocd_local_access ;;
-      9) action_delete_cluster ;;
-      0) echo "Bye."; exit 0 ;;
+      9) action_kill_argocd_port_forward ;;
+      d|D) action_delete_cluster ;;
+      q|Q) echo "Bye."; exit 0 ;;
       *) log_warn "Invalid option." ;;
     esac
     echo ""

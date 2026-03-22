@@ -346,7 +346,7 @@ disable_argocd_app() {
   
   # Optionally remove from cluster
   log_info "To also remove from cluster, run:"
-  log_info "  kubectl delete -f ${app_file}"
+  log_info "  kubectl delete application ${app_name} -n ${ARGOCD_NAMESPACE}"
 }
 
 argocd_admin_password() {
